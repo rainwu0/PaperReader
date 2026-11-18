@@ -56,6 +56,8 @@ export function useReaderViews(o: {
   /** 有重點筆記：沒有譯本時「譯本」改開它。 */
   hasDigest: boolean;
   openDigest: () => void;
+  /** 點一段的小框裡的「整段寫短評」。 */
+  onParagraphComment: (box: SegTarget) => void;
 }) {
   const { paperId, nav, sheets, materials, materialId, ready, viewRef, setToast } = o;
   const source = sourcePdf(materials);
@@ -244,6 +246,8 @@ export function useReaderViews(o: {
         onEdit: () => setPop({ ...pop, editing: true }),
         onSave: savePop,
         onCancelEdit: () => setPop({ ...pop, editing: false }),
+        // 整段寫短評：小框收起，整段存成一條劃線、打開短評面板
+        onComment: !overlayActive ? () => void nav.back().then(() => o.onParagraphComment({ page: popSeg.page, bbox: popSeg.bbox })) : undefined,
       }
     : null;
 

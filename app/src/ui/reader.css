@@ -140,6 +140,10 @@
   content: " ✓";
 }
 
+.outline-item:disabled {
+  opacity: 0.45;
+}
+
 /* 檢視切換裡可以移除的那幾份：名稱右邊一顆「移除」 */
 .view-row {
   display: flex;
@@ -311,6 +315,99 @@
     background: rgba(255, 140, 0, 0.55);
     outline: 2px solid rgba(176, 90, 0, 0.95);
   }
+}
+
+/* ---------- 短評顯示層：頁緣的標記、點了展開的卡片 ----------
+   在頁面最上面一層（蓋過文字層與筆刷），只有標記與卡片接點按，其餘讓給選字與捲動。
+   頁面是白紙，卡片也用紙的顏色，不跟著主題換；蓋到正文時是半透明的底（只用背景色的透明度，不另開合成層） */
+.cm-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.cm-mark {
+  position: absolute;
+  z-index: 1; /* 在卡片之上：卡片展開後仍點得到標記收起 */
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid rgba(140, 92, 0, 0.95);
+  border-radius: 6px 6px 6px 1px;
+  background: #ffe9a8;
+  pointer-events: auto;
+}
+
+/* 手指按的範圍比看得到的大：48 像素見方 */
+.cm-mark::before {
+  content: "";
+  position: absolute;
+  inset: -13px;
+}
+
+/* 對話框的樣子：中間一條短線 */
+.cm-mark::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(140, 92, 0, 0.95);
+  box-shadow: 0 4px 0 rgba(140, 92, 0, 0.95);
+}
+
+.cm-mark[aria-expanded="true"] {
+  background: #f2b400;
+}
+
+.cm-card {
+  position: absolute;
+  margin: 0;
+  padding: 6px 10px 0;
+  border: 1px solid rgba(140, 92, 0, 0.55);
+  border-radius: 8px;
+  background: rgba(255, 251, 236, 0.9);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  color: #1f1f1f;
+  font-size: 15px;
+  line-height: 1.45;
+  pointer-events: auto;
+  text-align: left;
+}
+
+.cm-card p {
+  margin: 0;
+}
+
+.cm-quote {
+  color: #5b5b5b;
+  font-size: 13px;
+}
+
+.cm-text {
+  max-height: 14em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.cm-actions button {
+  min-height: var(--tap);
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: #1f3d8f;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 /* 筆刷的畫布：平常不接觸控；筆刷打開時，手指在頁面上畫 */

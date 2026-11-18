@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { Highlight } from "../../api";
 import type { HintId } from "../../hints";
 import { t } from "../../strings";
-import { Button, Sheet, Spinner } from "../../ui/components";
+import { Button, CheckRow, Sheet, Spinner } from "../../ui/components";
 import { m as Motion, useMotion } from "../../ui/motion";
 import { pageText } from "./NotesPane";
 import { DEFAULT_PEN_COLOR } from "./pdfInk";
@@ -147,6 +147,38 @@ export function ViewsSheet(props: {
             ) : null}
           </li>
         ))}
+      </ul>
+    </Sheet>
+  );
+}
+
+/**
+ * 短評的顯示：工具箱「短評」旁的小箭頭打開。顯示短評（開關，記住上次的選擇）、全部展開、全部收起。
+ */
+export function CommentsSheet(props: {
+  open: boolean;
+  show: boolean;
+  onShow: (on: boolean) => void;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <Sheet open={props.open} title={t("reader.comments.title")} onDismiss={props.onDismiss}>
+      <CheckRow checked={props.show} onChange={props.onShow} hint={t("reader.comments.about")}>
+        {t("reader.comments.show")}
+      </CheckRow>
+      <ul className="outline-list">
+        <li>
+          <button type="button" className="outline-item" onClick={props.onExpandAll}>
+            {t("reader.comments.expandAll")}
+          </button>
+        </li>
+        <li>
+          <button type="button" className="outline-item" disabled={!props.show} onClick={props.onCollapseAll}>
+            {t("reader.comments.collapseAll")}
+          </button>
+        </li>
       </ul>
     </Sheet>
   );

@@ -219,6 +219,8 @@ export function SegmentPop(props: {
   onEdit: () => void;
   onSave: (text: string) => Promise<string | null>;
   onCancelEdit: () => void;
+  /** 整段寫短評；原頁疊譯文上不能劃線時不給。 */
+  onComment?: (() => void) | undefined;
 }) {
   const { seg, anchor } = props;
   const motion = useMotion("pop");
@@ -252,6 +254,7 @@ export function SegmentPop(props: {
           </p>
           <div className="seg-pop-actions">
             <Button onClick={props.onEdit}>{t("reader.text.edit")}</Button>
+            {props.onComment ? <Button onClick={props.onComment}>{t("reader.highlight.paragraph")}</Button> : null}
           </div>
         </>
       )}

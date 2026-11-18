@@ -55,8 +55,9 @@ export type SheetKind =
   | "moveIntro"
   | "moveConfirm"
   | "moveProgress"
-  /** 閱讀畫面：一條劃線的短評。 */
+  /** 閱讀畫面：一條劃線的短評；短評的顯示（工具箱「短評」旁的小箭頭）。 */
   | "highlightEdit"
+  | "commentMenu"
   | "addIntro"
   | "inTrash"
   | "privateNotice"

@@ -43,7 +43,7 @@ export function useHighlighting(o: {
     notesRef.current = notes;
   });
   const settled = useRef(new Set<string>());
-  /** 刪一條劃線（頁面上的小選單、短評面板、筆記窗格都用這個）：可以復原一次。 */
+  /** 刪一條劃線（頁面上的小選單、短評面板、筆記窗格、短評卡片都用這個）：可以復原一次。 */
   const removeHighlight = useCallback(
     (id: string) => {
       settled.current.delete(id);
@@ -87,6 +87,8 @@ export function useHighlighting(o: {
             n: h.page.index + 1,
             rects: h.rects,
             hasComment: h.comment.trim() !== "",
+            comment: h.comment,
+            quote: h.quote.exact,
           })),
       );
     if (!o.generated || mine.length === 0) {
@@ -152,6 +154,25 @@ export function useHighlighting(o: {
       }
     },
     [viewRef, notes, materialId, nav, setToast],
+  );
+
+  /**
+   * 整段寫短評：畫面上一點（選取的第一行、或點的那一段）所在的整段選起來，存成一條劃線、打開短評面板。
+   * 段落的範圍用現有的分段（譯文疊加檔的段落，沒有就用這一頁的版面分析）；不加新的資料格式。
+   */
+  const paragraphComment = useCallback(
+    async (at: { x: number; y: number } | { page: number; bbox: [number, number, number, number] }) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const box = "bbox" in at ? at : await view.paragraphAt(at.x, at.y);
+      const cap = box ? view.captureBox(box.page, box.bbox) : null;
+      if (!cap) {
+        setToast(t("reader.highlight.noParagraph"));
+        return;
+      }
+      await create(cap, true);
+    },
+    [viewRef, create, setToast],
   );
   const createRef = useRef(create);
   const modeRef = useRef({ highlightMode, canMark: o.canMark });
@@ -259,6 +280,12 @@ export function useHighlighting(o: {
     setHighlightMode(!highlightMode);
   };
 
+  /** 短評卡片的「編輯」：打開短評面板。 */
+  const editComment = (id: string) => {
+    setEditId(id);
+    nav.push({ name: "sheet", kind: "highlightEdit" });
+  };
+
   const editing = editId && !pending.includes(editId) ? (notes.view?.doc.highlights.find((h) => h.id === editId) ?? null) : null;
   const menuHighlight =
     menu && !pending.includes(menu.id) ? (notes.view?.doc.highlights.find((h) => h.id === menu.id) ?? null) : null;
@@ -268,12 +295,14 @@ export function useHighlighting(o: {
     selection,
     setSelection,
     create,
+    paragraphComment,
     tapHighlight,
     highlightIdAt,
     longPressHighlight,
     commentTool,
     highlightTool,
     editing,
+    editComment,
     menu: menuHighlight && menu ? { highlight: menuHighlight, anchor: menu.anchor } : null,
     openComment,
     deleteFromMenu,

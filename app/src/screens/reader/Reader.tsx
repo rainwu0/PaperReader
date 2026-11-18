@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { api, AppError, kindOf, type Highlight, type PaperDetail, type ToolboxDock, type ToolboxMode } from "../../api";
 import { isGeneratedPdf, lastDigest, sourcePdf } from "../../api/types";
 import { displayTitle } from "../../format";
-import { useBackOnTop, useViewportSize } from "../../hooks";
+import { isBool, useBackOnTop, useLocalPref, useViewportSize } from "../../hooks";
 import type { Nav, SheetKind } from "../../nav";
 import type { PrefsState } from "../../prefs";
 import { errorDetail, errorMessage, t } from "../../strings";
@@ -43,6 +43,7 @@ import { useHighlighting } from "./useHighlighting";
 import {
   BrushBar,
   brushStyleOf,
+  CommentsSheet,
   HighlightEdit,
   HighlightMenu,
   HintCard,
@@ -64,6 +65,9 @@ const READ_ERROR_AGAIN_MS = 10_000; // 讀不出來的提示收掉之後，又�
 const PEEK_H = 56; // 筆記窗格縮成一條時的高度
 const LONG_PRESS_MS = 500; // 按住劃線這麼久開小選單
 const LONG_PRESS_SLOP = 10; // 像素：手指移動超過這麼多就是在捲動，不算長按
+// 這台裝置上記住的選擇：短評顯示層開著沒有、全部展開沒有
+const COMMENTS_KEY = "pr-comments-show";
+const COMMENTS_ALL_KEY = "pr-comments-open-all";
 
 type LoadState =
   | { phase: "loading" }
@@ -110,6 +114,8 @@ export function Reader(props: {
   );
   // 捲動或縮放了（PDF 上點一段的小框要收起）
   const onMovedRef = useRef(() => {});
+  // 短評卡片上的「編輯」「刪除」（`PdfView` 建立時拿的是這個，裡面換成最新的）
+  const commentActs = useRef({ edit: (_id: string) => {}, remove: (_id: string) => {} });
 
   const [detail, setDetail] = useState<PaperDetail | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
@@ -323,6 +329,8 @@ export function Reader(props: {
         return material ? inkRef.current.add(material, st) : undefined;
       },
       onErase: (id) => void inkRef.current.erase(id),
+      onCommentEdit: (id) => commentActs.current.edit(id),
+      onCommentDelete: (id) => commentActs.current.remove(id),
       // 開啟之後有一段讀不出來：說一聲，「再試一次」重新開這一份（停在同一處）。之後捲到別的頁也讀不出來時，
       // 隔一陣子再說一次（提示幾秒後會收掉，空白的頁不能沒有說明）
       onReadError: () => {
@@ -466,6 +474,7 @@ export function Reader(props: {
     offerHint,
     hasDigest: !!digestMat,
     openDigest: () => nav.push({ name: "sheet", kind: "digest" }),
+    onParagraphComment: (box) => void hl.paragraphComment(box),
   });
   const { overlayActive, onSource } = views;
   const hlPopOpen = props.sheets.includes("hlPop");
@@ -523,6 +532,28 @@ export function Reader(props: {
     setToast,
   });
   const { selection, highlightMode } = hl;
+  useEffect(() => {
+    commentActs.current = { edit: hl.editComment, remove: hl.removeHighlight };
+  });
+
+  // ---------- 短評顯示層：開關與全部展開記在這台裝置上 ----------
+  const [commentsShown, setCommentsShown] = useLocalPref(COMMENTS_KEY, true, isBool);
+  const [commentsAll, setCommentsAll] = useLocalPref(COMMENTS_ALL_KEY, false, isBool);
+  // 筆刷開著（標記會擋住畫筆）、原頁疊譯文開著（劃線是蓋住的）時不顯示
+  const commentsVisible = commentsShown && !brushOn && !overlayActive;
+  useEffect(() => {
+    viewRef.current?.setCommentDisplay({ show: commentsVisible, openAll: commentsAll });
+  }, [commentsVisible, commentsAll, ready, materialId]);
+  const expandAllComments = () => {
+    setCommentsShown(true);
+    setCommentsAll(true);
+    void nav.back();
+  };
+  const collapseAllComments = () => {
+    setCommentsAll(false);
+    viewRef.current?.collapseComments();
+    void nav.back();
+  };
 
   // ---------- 長按劃線：一律開小選單，不受「點內容」開關影響 ----------
   // 按下去時不讀版面（點在哪一條劃線上要量頁面的位置，手勢剛開始時會逼瀏覽器先排一次版面，雙指縮放因此變慢）：
@@ -874,6 +905,9 @@ export function Reader(props: {
       icon: <CommentIcon />,
       unavailable: overlayActive,
       onClick: hl.commentTool,
+      // 小箭頭（或長按）：短評的顯示（顯示短評、全部展開、全部收起）
+      onMore: () => nav.push({ name: "sheet", kind: "commentMenu" }),
+      moreLabel: t("reader.tool.comment.more"),
     },
     { id: "jump", label: t("reader.tool.jump"), icon: <JumpIcon />, onClick: openJump },
     { id: "outline", label: t("reader.tool.outline"), icon: <OutlineIcon />, onClick: openOutline },
@@ -1030,6 +1064,17 @@ export function Reader(props: {
             <button type="button" onClick={() => void hl.create(selection, true)}>
               {t("reader.highlight.withComment")}
             </button>
+            <button
+              type="button"
+              onClick={() =>
+                void hl.paragraphComment({
+                  x: (selection.anchor.left + selection.anchor.right) / 2,
+                  y: (selection.anchor.top + selection.anchor.bottom) / 2,
+                })
+              }
+            >
+              {t("reader.highlight.paragraph")}
+            </button>
           </Motion.div>
         ) : null}
       </AnimatePresence>
@@ -1086,6 +1131,14 @@ export function Reader(props: {
         options={viewOptions}
         onDismiss={() => void nav.back()}
         onRemove={(id) => void nav.back().then(() => removeMaterialHere(id))}
+      />
+      <CommentsSheet
+        open={props.sheets.includes("commentMenu")}
+        show={commentsShown}
+        onShow={setCommentsShown}
+        onExpandAll={expandAllComments}
+        onCollapseAll={collapseAllComments}
+        onDismiss={() => void nav.back()}
       />
 
       <AnimatePresence>

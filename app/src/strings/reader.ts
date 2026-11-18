@@ -41,9 +41,22 @@ export const readerStrings = {
   "reader.highlight.lost": "{n} 條劃線找不到原位置，引句與短評仍在筆記。",
   "reader.highlight.translationNote": "原頁疊譯文上不能劃線。",
   "reader.highlight.noText": "這一頁選不到文字（可能是掃描檔）。",
+  "reader.highlight.paragraph": "整段寫短評",
+  "reader.highlight.noParagraph": "找不到這一段的範圍，可以拖選取的把手選整段再按「劃線並寫短評」。",
   "reader.edit.title": "劃線與短評",
   "reader.edit.hint": "寫一兩句話…",
   "reader.edit.delete": "刪除這條劃線",
+
+  // 短評顯示層：工具箱「短評」旁的小箭頭
+  "reader.tool.comment.more": "短評的顯示",
+  "reader.comments.title": "短評",
+  "reader.comments.show": "顯示短評",
+  "reader.comments.about": "開著時，有短評的劃線在頁緣有一個標記，點標記展開或收起短評。",
+  "reader.comments.expandAll": "全部展開",
+  "reader.comments.collapseAll": "全部收起",
+  "reader.comments.mark": "短評：{quote}",
+  "reader.comments.edit": "編輯",
+  "reader.comments.delete": "刪除",
 
   // 跳到別處之後（大綱、跳頁、筆記窗格、連結）
   "reader.back": "回到第 {page} 頁",
