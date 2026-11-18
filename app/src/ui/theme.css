@@ -752,6 +752,13 @@ p {
   margin-top: 8px;
 }
 
+/* 一行提示底下並排的兩個按鈕（首頁的新版提示：查看、略過這一版） */
+.notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .toast {
   display: flex;
   align-items: center;

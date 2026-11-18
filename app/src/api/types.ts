@@ -779,7 +779,61 @@ export type ErrorKind =
   | "ImportZipBackslash"
   | "SharedNotEmpty"
   | "MoveMismatch"
+  | "UpdateNetwork"
+  | "UpdateRateLimited"
+  | "UpdateBadRelease"
+  | "UpdateChecksum"
+  | "UpdateSignature"
+  | "UpdateUnverifiable"
+  | "UpdateGone"
+  | "UpdateInstall"
   | "Unknown";
+
+// ---------- 應用內檢查更新（`src-tauri/src/commands/update.rs`） ----------
+
+/** 查到的新版本。 */
+export interface UpdateAvailable {
+  /** 對外的版號（`規格/05`）。 */
+  version: string;
+  code: number;
+  /** 那一版的變更摘要（GitHub Release 的說明，原樣的文字）。 */
+  notes: string;
+  /** 安裝檔的大小（位元組）。 */
+  size: number;
+}
+
+export interface UpdateStatus {
+  /** 這台能用應用內更新（Android）。電腦上為假，畫面不顯示這一節。 */
+  supported: boolean;
+  /** 已安裝的版本。 */
+  current: string;
+  /** 看過「連到哪裡、送出什麼」並同意。 */
+  consented: boolean;
+  autoCheck: boolean;
+  /** 首頁問過「要不要在有新版時通知」。 */
+  invited: boolean;
+  lastCheck: number | null;
+  /** 首頁提示被關掉的那一版。 */
+  dismissed: string | null;
+  available: UpdateAvailable | null;
+  /** 已下載、核對過、還沒裝的那一版。 */
+  downloaded: string | null;
+  download: { running: boolean; done: number; total: number };
+  /** 連到哪裡（同意的說明用）。 */
+  host: string;
+  /** 現在是不是不計流量的網路；查不到時 `null`。 */
+  unmetered: boolean | null;
+}
+
+export interface UpdatePatch {
+  consented?: boolean;
+  autoCheck?: boolean;
+  invited?: boolean;
+  dismissed?: string;
+}
+
+/** 系統安裝程式最後回報的結果。裝成功時應用會被系統結束，所以沒有「成功」。 */
+export type UpdateInstallStatus = "waiting" | "failed" | "cancelled";
 
 // ---------- 翻譯（產生） ----------
 

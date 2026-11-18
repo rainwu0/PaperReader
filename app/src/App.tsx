@@ -34,6 +34,8 @@ import { errorDetail, errorMessage, t } from "./strings";
 import { Toast, type ToastData } from "./ui/components";
 import { AnimatePresence, m, MotionRoot, useExitingStyle, useMotion } from "./ui/motion";
 import { Help } from "./screens/settings/Help";
+import { Update } from "./screens/update/Update";
+import { updates } from "./updates";
 
 /** 把外殼回報的螢幕邊界（狀態列、瀏海、手勢列）寫成 CSS 變數，內容才不會被蓋住。 */
 function applyInsets() {
@@ -152,6 +154,8 @@ export function App() {
         }
       })
       .catch(() => {});
+    // 檢查更新：同意過、自動檢查開著，外殼才在超過一天時連網；查不到不打擾
+    void updates.startup();
     window.addEventListener("resize", applyInsets);
     return () => window.removeEventListener("resize", applyInsets);
     // 只在啟動時做一次
@@ -347,6 +351,8 @@ export function App() {
         );
       case "about":
         return <About nav={nav} />;
+      case "update":
+        return <Update nav={nav} sheet={ownerSheet} />;
       case "license":
         return <License nav={nav} item={r.item} />;
       case "generate":

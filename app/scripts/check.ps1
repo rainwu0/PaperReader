@@ -6,7 +6,8 @@
 #   1. npm run typecheck                                          介面的型別檢查（tsc --noEmit，嚴格模式）
 #   2. npm run lint                                               介面的靜態檢查（Oxlint，設定在 app\.oxlintrc.json）
 #   3. npm run test:ui                                            介面邏輯測試（搜尋、排序、篩選、PDF 自帶篇名的取捨；Node 內建測試器）
-#      node scripts/ext-boundary.mjs                              外掛的邊界：登記處以外沒有檔案引用外掛
+#      node scripts/version-check.mjs                             版號一致性：三處版號相同、格式合規、versionCode 照公式（規格\05）
+#      node scripts/ext-boundary.mjs                             外掛的邊界：登記處以外沒有檔案引用外掛
 #   4. node scripts/npm-audit.mjs                                 介面相依的已知漏洞（npm audit，要連網；audit-exceptions.json 列的例外放行）
 #   5. node scripts/npm-licenses.mjs                              介面相依的授權，對照和 app\deny.toml 相同的允許清單
 #   6. npm run build                                              介面建置。Rust 的應用外殼編譯時要內嵌建置結果，沒有它外殼編不過
@@ -38,6 +39,7 @@ $steps = @(
     @{ Name = '介面靜態檢查';   Cmd = 'npm run lint' },
     @{ Name = '介面邏輯測試';   Cmd = 'npm run test:ui' },
     @{ Name = '外掛的邊界';     Cmd = 'node scripts/ext-boundary.mjs' },
+    @{ Name = '版號一致性';     Cmd = 'node scripts/version-check.mjs' },
     @{ Name = '介面相依的漏洞'; Cmd = 'node scripts/npm-audit.mjs' },
     @{ Name = '介面相依的授權'; Cmd = 'node scripts/npm-licenses.mjs' },
     @{ Name = '介面建置';       Cmd = 'npm run build' },

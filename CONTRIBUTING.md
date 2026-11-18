@@ -40,6 +40,10 @@ pwsh -NoProfile -File app/scripts/check.ps1
 
 程式註解與專案文件以繁體中文為主，因為維護者與目標使用者以繁體中文為主。對外的 README、隱私說明、本文件另附英文。你用英文寫的 issue 與拉取要求都歡迎。
 
+## 版號與發布
+
+版號的寫法、各段的意義與 Android 的 versionCode 見[版號規則](規格/05_版號規則.md)。對外的版號用點（`0.1.12`、修正版 `0.1.12.3`）；用 `node app/scripts/bump-version.mjs <新版號>` 一次改好各處（設定檔裡自動換成工具收得下的 `0.1.12+3`）；`app/scripts/check.ps1` 會檢查三處版號與 versionCode 一致；發布 Android 安裝檔用 `app/scripts/release-android.ps1`。
+
 ## 授權
 
 本專案以 [Apache License 2.0](LICENSE) 授權。你送出的貢獻，視為依同一份授權提供給本專案。
@@ -58,6 +62,7 @@ pwsh -NoProfile -File app/scripts/check.ps1
 - **Build:** Tauri 2 (Rust core and shell, React and TypeScript UI, Kotlin for Android). See `README.md` ("Build from Source") and `app/README.md`. Useful commands in `app/`: `npm ci`, `npm run dev`, `npm run typecheck`, `npm run lint`, `npm run test:ui`, `npm run build`, `cargo test --workspace`.
 - **Before submitting:** run `pwsh -NoProfile -File app/scripts/check.ps1` (type check, lint, UI tests, build, rustfmt, clippy with warnings denied, cargo-deny, Rust tests). CI runs the same checks.
 - **Commits:** Conventional Commits (`feat`, `fix`, `docs`, `test`, `refactor`, `chore`); one change per commit.
+- **Versions:** the version format and what each part means are in `規格/05_版號規則.md` (Traditional Chinese). `node app/scripts/bump-version.mjs <version>` updates every place at once; `check.ps1` verifies they agree.
 - **Language:** code comments and project docs are mainly in Traditional Chinese; issues and pull requests in English are welcome.
 - **License:** contributions are licensed under Apache-2.0, the same as the project.
 - **Learning from other projects:** learn from their approach, do not copy code, styles, icons, UI text, layouts, names or trademarks. If you had to read source to understand something, rewrite it from your own design and note the reference. Make sure any new third-party library has a permissive license.

@@ -133,6 +133,19 @@ pub(crate) struct Planned {
 /// 日後會得到一個有新代號、內容殘缺、看起來卻像正常的文獻庫）。上層資料夾不存在時，等檢查都過了、
 /// 要解出之前才建立（失敗的還原不留下任何東西）。
 pub fn restore_backup(archive: &Path, target: &Path, device_id: &str) -> Result<RestoreReport> {
+    restore_backup_with_progress(archive, target, device_id, &mut |_, _| {})
+}
+
+/// [`restore_backup`]，解出每個檔之後回報一次進度（`progress(已解出的位元組, 全部的位元組)`）。
+///
+/// 要顯示還原進度時用這個，不要在還原途中另外走訪暫存資料夾量大小：Windows 上那個資料夾底下有任何
+/// 東西開著時，第 6 步的改名會回 ERROR_ACCESS_DENIED。
+pub fn restore_backup_with_progress(
+    archive: &Path,
+    target: &Path,
+    device_id: &str,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<RestoreReport> {
     // 1. 裝置代號、目標
     if !is_valid_id(device_id) {
         return Err(LibError::InvalidInput {
@@ -194,7 +207,7 @@ pub fn restore_backup(archive: &Path, target: &Path, device_id: &str) -> Result<
         undo_parent();
         return Err(io_error(&staging, e));
     }
-    if let Err(e) = extract_all(archive, &mut zip, &plan, &staging, &mut |_, _| {}) {
+    if let Err(e) = extract_all(archive, &mut zip, &plan, &staging, progress) {
         let _ = fs::remove_dir_all(&staging);
         undo_parent();
         return Err(e);

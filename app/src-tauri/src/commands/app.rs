@@ -11,7 +11,8 @@ use tauri_plugin_paperreader::{Insets, PaperReaderExt};
 
 #[derive(Serialize)]
 pub struct AppInfo {
-    pub version: &'static str,
+    /// 對外的版號（規格/05 第 1 節）：設定檔裡的 `a.b.c+d` 在這裡是 `a.b.c.d`。
+    pub version: String,
     /// 這個建置的作業系統：`android`、`windows` 或 `other`。「關於」頁依它只列這個安裝檔內含的組件。
     pub platform: &'static str,
 }
@@ -24,10 +25,30 @@ const PLATFORM: &str = if cfg!(target_os = "android") {
     "other"
 };
 
+/// 對外的版號：Cargo 的版號 `a.b.c+d` 換成 `a.b.c.d`（規格/05 第 1 節；`+` 不出現在任何對外的地方）。
+pub fn public_version() -> String {
+    to_public_version(env!("CARGO_PKG_VERSION"))
+}
+
+fn to_public_version(tool_version: &str) -> String {
+    tool_version.replace('+', ".")
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::to_public_version;
+
+    #[test]
+    fn plus_becomes_a_dot() {
+        assert_eq!(to_public_version("0.1.12+3"), "0.1.12.3");
+        assert_eq!(to_public_version("0.1.12"), "0.1.12");
+    }
+}
+
 #[tauri::command]
 pub fn app_info() -> AppInfo {
     AppInfo {
-        version: env!("CARGO_PKG_VERSION"),
+        version: public_version(),
         platform: PLATFORM,
     }
 }

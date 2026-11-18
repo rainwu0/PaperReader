@@ -859,4 +859,103 @@ class PaperReaderPlugin(private val activity: Activity) : Plugin(activity) {
         )
         invoke.resolve(ret)
     }
+
+    // ---------- 應用內更新（做法在 AppUpdate.kt） ----------
+
+    private val updateQueue = Executors.newSingleThreadExecutor()
+
+    /** 系統記的這個應用的版本（不是編譯時寫進程式的）。 */
+    @Command
+    fun appVersion(invoke: Invoke) {
+        val info = AppUpdate.installedInfo(activity)
+        val ret = JSObject()
+        ret.put("versionName", info.versionName ?: "")
+        ret.put("versionCode", AppUpdate.versionCode(info))
+        invoke.resolve(ret)
+    }
+
+    @Command
+    fun inspectApk(invoke: Invoke) {
+        val args = invoke.parseArgs(PathArgs::class.java)
+        updateQueue.execute {
+            try {
+                val ret = JSObject()
+                for ((k, v) in AppUpdate.inspect(activity, args.path)) ret.put(k, v)
+                invoke.resolve(ret)
+            } catch (e: Exception) {
+                invoke.reject("cannot read apk")
+            }
+        }
+    }
+
+    /**
+     * 還沒允許「安裝不明應用程式」時不開始，交回 needs_permission；寫進安裝 session 的內容和 `sha256` 不符時放棄，
+     * 交回 mismatch；否則交給系統，交回 committed。
+     */
+    @Command
+    fun installApk(invoke: Invoke) {
+        val args = invoke.parseArgs(InstallArgs::class.java)
+        if (!Regex("^[0-9a-fA-F]{64}$").matches(args.sha256)) {
+            invoke.reject("missing sha256")
+            return
+        }
+        val file = AppUpdate.inUpdates(activity, args.path)
+        if (file == null) {
+            invoke.reject("not a downloaded update")
+            return
+        }
+        if (!AppUpdate.canInstall(activity)) {
+            val ret = JSObject()
+            ret.put("result", "needs_permission")
+            invoke.resolve(ret)
+            return
+        }
+        updateQueue.execute {
+            try {
+                val ok = AppUpdate.install(activity, file, args.sha256)
+                val ret = JSObject()
+                ret.put("result", if (ok) "committed" else "mismatch")
+                invoke.resolve(ret)
+            } catch (e: Exception) {
+                invoke.reject("install failed")
+            }
+        }
+    }
+
+    @Command
+    fun installStatus(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("status", AppUpdate.lastStatus)
+        AppUpdate.lastStatus = null
+        invoke.resolve(ret)
+    }
+
+    /** 系統的「安裝不明應用程式」頁，只有這個應用那一項。 */
+    @Command
+    fun openInstallSettings(invoke: Invoke) {
+        if (Build.VERSION.SDK_INT < 26) {
+            invoke.reject("this Android version has no per-app install permission")
+            return
+        }
+        val i = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+        i.data = Uri.parse("package:" + activity.packageName)
+        try {
+            activity.startActivity(i)
+            invoke.resolve()
+        } catch (e: Exception) {
+            invoke.reject("cannot open settings")
+        }
+    }
+}
+
+@InvokeArg
+class PathArgs {
+    var path: String = ""
+}
+
+/** 安裝：下載檔的位置與核對過的 SHA-256（寫進安裝 session 時再算一次）。 */
+@InvokeArg
+class InstallArgs {
+    var path: String = ""
+    var sha256: String = ""
 }

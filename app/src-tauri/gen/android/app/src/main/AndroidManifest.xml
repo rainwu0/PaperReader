@@ -4,7 +4,8 @@
          用到那項功能（第一次加入文獻）時才要求，被拒絕仍可使用。 -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <!-- 連網只有一個用途：把論文的文字送到使用者自己設定的翻譯服務（使用者已同意；每次送出前都會詢問，
-         除非使用者在設定裡勾了「不再詢問」）。基本功能（閱讀、劃線、筆記、紀錄）不連網。 -->
+         除非使用者在設定裡勾了「不再詢問」）。基本功能（閱讀、劃線、筆記、紀錄）不連網。
+         另一個用途：使用者同意後向 GitHub 檢查新版、下載安裝檔（權限宣告在平台轉接器的 manifest）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- AndroidTV support -->

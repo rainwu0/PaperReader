@@ -82,6 +82,10 @@ import type {
   TrashEntry,
   RemovedMaterialEntry,
   PurgeReport,
+  UpdateAvailable,
+  UpdateInstallStatus,
+  UpdatePatch,
+  UpdateStatus,
 } from "./types";
 
 export type * from "./types";
@@ -124,6 +128,14 @@ const KNOWN_KIND_TABLE: Record<Exclude<ErrorKind, "Unknown">, true> = {
   ImportZipBackslash: true,
   SharedNotEmpty: true,
   MoveMismatch: true,
+  UpdateNetwork: true,
+  UpdateRateLimited: true,
+  UpdateBadRelease: true,
+  UpdateChecksum: true,
+  UpdateSignature: true,
+  UpdateUnverifiable: true,
+  UpdateGone: true,
+  UpdateInstall: true,
 };
 const KNOWN_KINDS: ReadonlySet<string> = new Set(Object.keys(KNOWN_KIND_TABLE));
 
@@ -327,6 +339,20 @@ export const api = {
 
   /** 全部引擎的申報。 */
   translateEngines: () => call<EngineInfo[]>("translate_engines"),
+
+  // 應用內檢查更新（只有 Android）
+  updateStatus: () => call<UpdateStatus>("update_status"),
+  updateConfigure: (patch: UpdatePatch) => call<void>("update_configure", { patch }),
+  /** `manual` 為假（打開應用時）：自動檢查關著或一天內查過就不連網，交回已知的結果。沒同意過一律不連網。 */
+  updateCheck: (manual: boolean) => call<UpdateAvailable | null>("update_check", { manual }),
+  /** 下載並核對；完成才交回那一版的版號。進度看 `updateStatus().download`。 */
+  updateDownload: () => call<string>("update_download"),
+  updateDownloadCancel: () => call<void>("update_download_cancel"),
+  /** 交給系統安裝：`needs_permission`（要先允許「安裝不明應用程式」）或 `committed`。 */
+  updateInstall: () => call<"needs_permission" | "committed">("update_install"),
+  updateInstallStatus: () => call<UpdateInstallStatus>("update_install_status"),
+  updateOpenInstallSettings: () => call<void>("update_open_install_settings"),
+  updateDiscard: () => call<void>("update_discard"),
 
   // 離線翻譯：狀態、下載與刪除模型、畫面一側引擎（Firefox 翻譯）的橋
   onDeviceStatus: () => call<OnDeviceStatus>("ondevice_status"),

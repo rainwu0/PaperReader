@@ -68,6 +68,23 @@ pub enum ErrorKind {
     SharedNotEmpty,
     /// 搬到共用空間：搬過去的與原本的核對不符，或有檔案沒能放進暫存的備份檔。
     MoveMismatch,
+    /// 檢查更新：連不上 GitHub。
+    UpdateNetwork,
+    /// 檢查更新：GitHub 暫時拒絕（不帶金鑰的請求每小時有上限）。
+    UpdateRateLimited,
+    /// 檢查更新：GitHub 交回的內容讀不懂，或那一版缺這台裝置要的安裝檔、核對碼清單。
+    UpdateBadRelease,
+    /// 下載的安裝檔和公布的 SHA-256 不符：已刪掉，沒有安裝。
+    UpdateChecksum,
+    /// 下載的安裝檔不是同一個應用、版本不比現在新，或簽章憑證和已安裝的不同：已刪掉，沒有安裝。
+    UpdateSignature,
+    /// 這台手機讀不出下載的安裝檔或它的簽章憑證，無從核對：已刪掉，沒有安裝。
+    /// 和 [`ErrorKind::UpdateSignature`] 分開：讀不到不代表是假的。
+    UpdateUnverifiable,
+    /// 那一版已從 GitHub 撤下（下載時 404）：查到的版本與下載的檔都清掉。
+    UpdateGone,
+    /// 系統沒有裝成（使用者在確認畫面按了取消、空間不夠、系統拒絕）。
+    UpdateInstall,
 }
 
 #[derive(Debug, Clone, Serialize)]

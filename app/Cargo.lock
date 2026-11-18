@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "paperreader-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "lopdf",
@@ -3090,8 +3090,10 @@ dependencies = [
  "paperreader-ext-fulltext",
  "paperreader-ext-links",
  "paperreader-translate",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-paperreader",
@@ -3102,7 +3104,7 @@ dependencies = [
 
 [[package]]
 name = "paperreader-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hayagriva",
  "serde",
@@ -3119,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "paperreader-ext-fulltext"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "paperreader-core",
  "rusqlite",
@@ -3129,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "paperreader-ext-links"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "paperreader-core",
  "serde",
@@ -3139,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "paperreader-translate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "genai",
  "ort",
@@ -3413,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "prcli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "paperreader-core",
  "serde",
@@ -4793,7 +4795,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-paperreader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

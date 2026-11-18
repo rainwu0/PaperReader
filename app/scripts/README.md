@@ -8,6 +8,7 @@
 | `notes-test.mjs` | 介面邏輯測試：筆記窗格撞上別處的修改時，算出哪一段沒存進去（`src/screens/reader/notesConflict.ts`）。`npm run test:ui` 的一部分 |
 | `dev-env.ps1` | 點號載入（`. app\scripts\dev-env.ps1`）：在目前的視窗設定 Android 建置要用的 `JAVA_HOME`、`ANDROID_HOME`、`NDK_HOME`。已經設了就照用；沒設時從 `PAPERREADER_TOOLS`（放 `jdk17` 與 `Android\Sdk` 的資料夾）推出來；都沒有就停下說明 |
 | `emulator.ps1` | 建立並啟動一台模擬器（`-Name`，預設 `pilot`；`-Port` 指定序號 `emulator-<Port>`），等它開機 |
+| `fake-github-server.mjs` | 驗收應用內更新用的假 GitHub：Releases API 加附件下載（轉到另一個埠，和 GitHub 一樣），附件的核對碼由這裡算；`--mode corrupt` 下載時改壞安裝檔、`--mode ratelimit` 清單回 403。除錯版在編譯時設 `PAPERREADER_UPDATE_BASE=http://10.0.2.2:<埠>` 才會問它；正式版寫死 GitHub |
 | `make-test-pdfs.py` | 產生驗收用的三份合成 PDF（30 頁、約 5 MB、620 頁約 53 MB）；`walkthrough.ps1` 與 `emulator-check.ps1` 在 `app/target/test-pdfs/` 沒有時自己呼叫 |
 | `emulator-check.ps1` | 在 Android 模擬器上跑核心（文獻庫）的驗收項目（十九項），用命令列工具 `prcli` |
 | `walkthrough.ps1` | 在模擬器上走「怎麼算成功」七件事各一條主流程並截圖：收進來、接著讀、讀過什麼、找到某一篇、記下想法、不失去東西、對照母語。`-Serial` 必填（指定哪一台模擬器）；`-Only 5` 只跑第 5 條；輸出預設在 `app/target/walkthrough/`（`-OutDir` 可改）。細節在 `walkthrough/` |

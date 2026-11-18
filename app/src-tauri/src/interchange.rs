@@ -96,7 +96,7 @@ pub fn tmx(doc: &OverlayFile) -> String {
     s.push_str("<tmx version=\"1.4\">\n");
     s.push_str(&format!(
         "  <header creationtool=\"PaperReader\" creationtoolversion=\"{}\" segtype=\"paragraph\" o-tmf=\"PaperReader\" adminlang=\"en\" srclang=\"{src}\" datatype=\"plaintext\"/>\n",
-        env!("CARGO_PKG_VERSION")
+        crate::commands::app::public_version()
     ));
     s.push_str("  <body>\n");
     for g in &doc.segments {

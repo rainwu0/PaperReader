@@ -40,6 +40,9 @@ lopdf = { version = "0.47", default-features = false }
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 # 版面模型：畫面以 Base64 交來的頁面圖（相依圖裡本來就有這個版本，不是新的組件）
 base64 = "0.23"
+# 檢查更新：問 GitHub、下載安裝檔、核對 SHA-256。用翻譯套件同一個用戶端與同一版，不是新的組件
+reqwest = { version = "0.13", default-features = false }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

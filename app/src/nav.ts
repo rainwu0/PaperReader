@@ -83,6 +83,9 @@ export type SheetKind =
   | "joinResult"
   /** 外掛在文獻資訊的一節裡開的面板（選單、挑一篇；`useStackLayer`）。 */
   | "ext"
+  /** 檢查更新：用行動數據下載前的確認、第一次更新要允許「安裝不明應用程式」的說明。 */
+  | "updateMetered"
+  | "updatePermission"
   /** 點 ⓘ 打開的說明框（`ui/components.tsx` 的 `InfoTip`）。 */
   | "tip";
 
@@ -121,6 +124,8 @@ export type Route =
   /** 整批匯入的預覽（寫入之前列出會加入、會略過的篇）。 */
   | { name: "importPreview" }
   | { name: "about" }
+  /** 檢查更新（只有 Android）：同意、檢查、下載、安裝。 */
+  | { name: "update" }
   /** 關於頁裡一項組件（或應用本身，`item` 是 `app`）的授權全文。`item` 是 `群組:序號`。 */
   | { name: "license"; item: string }
   /** 產生譯本與重點筆記（只有前端）。`kind` 是一打開就在哪一種（沒給是譯本）。 */

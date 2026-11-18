@@ -2,4 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- 「只在 Wi-Fi 下載語言模型」要知道現在是不是不計流量的網路 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 應用內更新：把從 GitHub 下載、核對過 SHA-256 與簽章憑證的新版交給系統安裝。
+         使用者在系統設定裡允許「安裝不明應用程式」之後才有作用；不允許也照常使用，只是不能在應用裡更新。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 12 起：更新自己時不必再按一次「安裝」（一般權限，安裝時自動給） -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
+    <application>
+        <!-- 接系統安裝程式的回報；只收這個應用自己發的 -->
+        <receiver
+            android:name="io.github.rainwu0.paperreader.plugin.InstallStatusReceiver"
+            android:exported="false" />
+    </application>
 </manifest>

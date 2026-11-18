@@ -1,7 +1,8 @@
 //! PaperReader 的平台轉接器。
 //!
 //! 做各平台才有的事：查「所有檔案存取」權限與各個儲存位置、帶使用者到授權頁、
-//! 開系統的選檔畫面（可以一次選多份）、收下別的應用分享進來的 PDF、回報螢幕邊界、設定系統列的明暗、閱讀時讓螢幕不關。網頁碰不到它：外掛沒有開放任何指令，
+//! 開系統的選檔畫面（可以一次選多份）、收下別的應用分享進來的 PDF、回報螢幕邊界、設定系統列的明暗、閱讀時讓螢幕不關、
+//! 應用內更新的安裝檔核對與交給系統安裝（只有 Android）。網頁碰不到它：外掛沒有開放任何指令，
 //! 應用的指令（`src-tauri`）經由 [`PaperReaderExt`] 呼叫它。
 //!
 //! Android 用自有的 Kotlin 程式（`android/`）。電腦在 `desktop.rs`：同一組方法、同樣的結果，
@@ -77,6 +78,38 @@ pub struct NetworkInfo {
     pub online: bool,
     /// 不計流量的網路（Wi-Fi 之類）。
     pub unmetered: bool,
+}
+
+/// 已安裝的這個應用的版本（系統記的，不是編譯時寫進程式的）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppVersion {
+    pub version_name: String,
+    pub version_code: u64,
+}
+
+/// 下載的安裝檔讀出來的資訊（應用內更新）。讀不出來的欄位一律當成不符。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApkInfo {
+    /// 安裝檔讀得懂（是 Android 的安裝檔）。
+    pub readable: bool,
+    /// 套件名稱和已安裝的這個應用相同。
+    pub same_package: bool,
+    pub version_code: u64,
+    /// 簽章憑證和已安裝的相同（或是已安裝那把金鑰合法輪替後的新金鑰）。讀不到憑證時為假。
+    pub same_signer: bool,
+    /// 兩邊的簽章憑證都讀得到。為假時 `same_signer` 沒有意義：是讀不到，不是不同。
+    #[serde(default)]
+    pub signer_readable: bool,
+}
+
+/// 系統安裝程式最後回報的結果（`PackageInstaller` 的狀態）。裝成功時應用會被系統結束，收不到成功。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallStatus {
+    /// `PackageInstaller.STATUS_*` 的值（-1 等使用者確認、0 成功、1 以上失敗；3 是使用者取消）。
+    pub status: i32,
 }
 
 /// 螢幕邊界（單位：CSS 像素，也就是 dp）：狀態列、瀏海、手勢列占掉的部分。
@@ -323,6 +356,48 @@ mod android_impl {
 
         pub async fn network_info(&self) -> Result<NetworkInfo> {
             self.call("networkInfo", Value::Null).await
+        }
+
+        // ---------- 應用內更新 ----------
+
+        pub async fn app_version(&self) -> Result<AppVersion> {
+            self.call("appVersion", Value::Null).await
+        }
+
+        /// 讀下載的安裝檔：套件名稱、versionCode、簽章憑證是否和已安裝的相同。
+        pub async fn inspect_apk(&self, path: &str) -> Result<ApkInfo> {
+            self.call("inspectApk", json!({ "path": path })).await
+        }
+
+        /// 交給系統安裝。交回 `needs_permission`（還沒允許「安裝不明應用程式」，沒有開始）、
+        /// `mismatch`（寫進安裝 session的內容和 `sha256` 不符，已放棄，沒有交給系統）或
+        /// `committed`（已交給系統；要使用者確認時系統的確認畫面由外掛打開）。
+        pub async fn install_apk(&self, path: &str, sha256: &str) -> Result<String> {
+            #[derive(Deserialize)]
+            struct Raw {
+                result: String,
+            }
+            let raw: Raw = self
+                .call("installApk", json!({ "path": path, "sha256": sha256 }))
+                .await?;
+            Ok(raw.result)
+        }
+
+        /// 系統安裝程式最後回報的結果（取一次就清掉）；還沒有回報是 `None`。
+        pub async fn install_status(&self) -> Result<Option<InstallStatus>> {
+            #[derive(Deserialize)]
+            struct Raw {
+                status: Option<i32>,
+            }
+            let raw: Raw = self.call("installStatus", Value::Null).await?;
+            Ok(raw.status.map(|status| InstallStatus { status }))
+        }
+
+        /// 開系統的「安裝不明應用程式」頁（只有這個應用的那一項）。
+        pub async fn open_install_settings(&self) -> Result<()> {
+            self.call::<Value>("openInstallSettings", Value::Null)
+                .await
+                .map(|_| ())
         }
     }
 }

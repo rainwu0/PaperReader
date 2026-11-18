@@ -53,7 +53,7 @@ Not available:
 
 ## Install
 
-Installable packages are on this repository's Releases page, starting with 0.1.0. Most phones need `PaperReader-<version>-arm64.apk`; use the `x86_64` one for the emulator. Each release includes `SHA256SUMS.txt` for checking the download. Downloading, checking, installing and first use are described in [Installation and first use](docs/安裝與第一次使用.md) (Traditional Chinese).
+Installable packages are on this repository's Releases page, starting with 0.1.0. Most phones need `PaperReader-<version>-arm64.apk` (for example `PaperReader-0.1.1-arm64.apk`; a fix release has a fourth number, such as `PaperReader-0.1.1.1-arm64.apk`); use the `x86_64` one for the emulator. Each release includes `SHA256SUMS.txt` for checking the download. Downloading, checking, installing and first use are described in [Installation and first use](docs/安裝與第一次使用.md) (Traditional Chinese).
 
 Screenshots are in the [user guides](#documentation).
 

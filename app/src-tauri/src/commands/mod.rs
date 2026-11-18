@@ -21,3 +21,4 @@ pub mod sync;
 pub mod text;
 pub mod thumbs;
 pub mod translate;
+pub mod update;

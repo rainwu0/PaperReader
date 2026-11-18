@@ -483,6 +483,28 @@ impl<R: Runtime> PaperReader<R> {
             unmetered: true,
         })
     }
+
+    // 應用內更新只做 Android；電腦版之後用 Tauri 官方的更新外掛。畫面在電腦上不顯示這一節。
+
+    pub async fn app_version(&self) -> Result<AppVersion> {
+        Err(Error::Unsupported)
+    }
+
+    pub async fn inspect_apk(&self, _path: &str) -> Result<ApkInfo> {
+        Err(Error::Unsupported)
+    }
+
+    pub async fn install_apk(&self, _path: &str, _sha256: &str) -> Result<String> {
+        Err(Error::Unsupported)
+    }
+
+    pub async fn install_status(&self) -> Result<Option<InstallStatus>> {
+        Ok(None)
+    }
+
+    pub async fn open_install_settings(&self) -> Result<()> {
+        Err(Error::Unsupported)
+    }
 }
 
 #[cfg(test)]

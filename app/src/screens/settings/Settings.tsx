@@ -21,7 +21,9 @@ import {
   SyncIcon,
   ThemeIcon,
   TrashIcon,
+  UpdateIcon,
 } from "./settingsIcons";
+import { useUpdates } from "../../updates";
 import { useBackup } from "./useBackup";
 import { useMove } from "./useMove";
 import type { NoticeMore } from "../add/useAdd";
@@ -61,6 +63,7 @@ export function Settings(props: {
   const [keepToolbox, setKeepToolbox] = useToolboxKeepOpen();
   // 整理文獻庫（逐篇處理）：已處理幾篇
   const organize = useSyncExternalStore(perPaper.subscribe, perPaper.getProgress);
+  const updateState = useUpdates();
 
   const themes: Array<[Theme, StringKey]> = [
     ["system", "settings.theme.system"],
@@ -192,6 +195,20 @@ export function Settings(props: {
 
 
           <Section title={t("about.title")}>
+            {/* 檢查更新只有 Android；電腦版之後用 Tauri 官方的更新外掛 */}
+            {updateState?.supported ? (
+              <SettingRow
+                icon={<UpdateIcon />}
+                title={t("update.settings.row")}
+                value={
+                  updateState.available
+                    ? t("update.settings.available", { version: updateState.available.version })
+                    : updateState.current
+                }
+                chevron
+                onClick={() => nav.push({ name: "update" })}
+              />
+            ) : null}
             <SettingRow
               icon={<AboutIcon />}
               title={t("settings.about")}

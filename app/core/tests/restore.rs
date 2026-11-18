@@ -183,6 +183,29 @@ fn export_to(lib: &LocalLibrary, dir: &Path) -> PathBuf {
 
 // ---- 測試 ----
 
+/// 進度由還原自己回報：呼叫的一方不必在還原途中走訪暫存資料夾量大小
+/// （Windows 上那樣會讓改名撞上開著的資料夾、回 PermissionDenied）。
+#[test]
+fn restore_reports_its_progress() {
+    let (_dir, lib) = build_library();
+    let work = tempfile::tempdir().unwrap();
+    let archive = export_to(&lib, work.path());
+    let target = work.path().join("restored");
+    let mut seen: Vec<(u64, u64)> = Vec::new();
+    let report = paperreader_core::backup::restore_backup_with_progress(
+        &archive,
+        &target,
+        DEVICE,
+        &mut |done, all| seen.push((done, all)),
+    )
+    .unwrap();
+    assert!(!seen.is_empty(), "no progress was reported");
+    assert!(seen.iter().all(|&(_, all)| all == report.bytes), "{seen:?}");
+    assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "{seen:?}");
+    assert_eq!(seen.last().map(|s| s.0), Some(report.bytes));
+    assert!(report.manifest_mismatches.is_empty());
+}
+
 #[test]
 fn roundtrip_is_identical() {
     let (dir, lib) = build_library();

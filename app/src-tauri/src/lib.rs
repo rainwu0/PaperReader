@@ -10,6 +10,7 @@ mod pdfstrip;
 mod state;
 mod translate;
 mod transport;
+mod update;
 
 use state::{AppState, Settings};
 use tauri::Manager;
@@ -33,11 +34,13 @@ pub fn run() {
             app.manage(std::sync::Arc::new(commands::layout::LayoutState::default()));
             app.manage(std::sync::Arc::new(commands::sync::SyncProgress::default()));
             app.manage(std::sync::Arc::new(commands::import::ImportSlot::default()));
+            app.manage(std::sync::Arc::new(update::UpdateSlot::default()));
             ext::setup(app);
             // 上次被中斷留下的選檔暫存
             if let Ok(cache) = app.path().app_cache_dir() {
                 commands::add::clear_pick_cache(&cache);
                 commands::export::clear_export_cache(&cache);
+                commands::update::clear_stale(&cache);
             }
             Ok(())
         })
@@ -173,6 +176,15 @@ pub fn run() {
             commands::reading::read_material_range,
             commands::app::app_info,
             commands::app::open_url,
+            commands::update::update_status,
+            commands::update::update_configure,
+            commands::update::update_check,
+            commands::update::update_download,
+            commands::update::update_download_cancel,
+            commands::update::update_install,
+            commands::update::update_install_status,
+            commands::update::update_open_install_settings,
+            commands::update::update_discard,
             commands::app::startup_notice,
             commands::app::get_theme,
             commands::app::set_theme,

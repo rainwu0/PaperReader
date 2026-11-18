@@ -24,6 +24,14 @@ export const PagesIcon = () => (
   </svg>
 );
 
+/** 檢查更新：向下的箭頭進到托盤 */
+export const UpdateIcon = () => (
+  <svg {...common}>
+    <path d="M12 4v10M7.5 9.5L12 14l4.5-4.5" />
+    <path d="M4.5 15.5v3a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-3" />
+  </svg>
+);
+
 export const SunIcon = () => (
   <svg {...common}>
     <circle cx="12" cy="12" r="3.5" />

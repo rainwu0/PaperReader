@@ -37,7 +37,9 @@ android {
         minSdk = 24
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        // 對外的版號（規格/05 第 1、7 節）：Tauri 給的是設定檔的 `a.b.c+d`，系統設定裡要看到 `a.b.c.d`。
+        // scripts/version-check.mjs 檢查這一行還在（Tauri 重新產生專案若蓋掉它，檢查會不過）。
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0").replace('+', '.')
     }
     if (keystorePropertiesFile.exists()) {
         signingConfigs {

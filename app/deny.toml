@@ -79,7 +79,6 @@ highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
-allow-workspace = false
 deny = []
 skip = []
 skip-tree = []

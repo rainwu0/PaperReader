@@ -20,6 +20,7 @@ import type { Nav, SheetKind } from "../../nav";
 import type { PrefsState } from "../../prefs";
 import { errorDetail, errorMessage, t, type StringKey } from "../../strings";
 import { Button, CheckRow, Choice, ChoiceList, Details, ErrorNotice, IconButton, Sheet, Spinner } from "../../ui/components";
+import { UpdateNotice } from "../update/UpdateNotice";
 import { CloseIcon, MenuIcon, PlusIcon, SearchIcon, StatusDot } from "../../ui/icons";
 import { Cover } from "./Cover";
 import { MoreIcon, StackIcon } from "./homeIcons";
@@ -486,6 +487,7 @@ export function Home(props: {
             </div>
           </div>
         ) : null}
+        <UpdateNotice nav={nav} hasPapers={hasPapers} />
         {props.problems.length > 0 ? (
           <div className="notice" role="status" data-problems={props.problems.length}>
             {t("home.problems", { n: props.problems.length })}

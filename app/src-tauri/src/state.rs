@@ -8,6 +8,7 @@ use crate::error::{ApiError, ApiResult, ErrorKind};
 use crate::location::{self, Plan, Storage};
 use crate::translate::TranslateSettings;
 use paperreader_core::error::{LibError, io_error};
+use paperreader_core::fsretry;
 use paperreader_core::ids::{is_valid_id, new_id, now_compact};
 use paperreader_core::jsonio::write_json_atomic;
 use paperreader_core::local::LocalLibrary;
@@ -137,6 +138,27 @@ pub struct Settings {
     /// 沒刪完（刪不掉、或刪到一半程序被結束）下次開應用時接著刪。
     #[serde(default)]
     pub move_cleanup: Option<MoveCleanup>,
+    /// 檢查更新：同意了沒有、要不要自動檢查、上次什麼時候查的。
+    #[serde(default)]
+    pub update: UpdateSettings,
+}
+
+/// 檢查更新的設定。預設不連網：使用者看過「連到哪裡、送出什麼」並同意之前，一個請求都不送。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// 看過說明並同意連到 GitHub 檢查。
+    pub consented: bool,
+    /// 打開應用時自動檢查（一天最多一次）。預設關。
+    pub auto_check: bool,
+    /// 首頁問過「要不要在有新版時通知」（答好或不要都算），不再問。
+    pub invited: bool,
+    /// 上次真的連到 GitHub 檢查的時間（Unix 秒）。
+    pub last_check: Option<u64>,
+    /// 首頁的新版提示被關掉的那一版（對外的版號）；同一版不再在首頁提示，設定裡仍看得到。
+    pub dismissed: Option<String>,
+    /// 上次檢查查到的新版本（重開應用、一天之內不再查時，首頁照樣提示；裝上之後就不算新）。
+    pub found: Option<crate::update::Available>,
 }
 
 /// 搬過去之後還要刪的。只在設定指向共用空間、那裡的文獻庫開得起來時才刪。
@@ -181,6 +203,7 @@ impl Settings {
             translate: TranslateSettings::default(),
             pending_move: None,
             move_cleanup: None,
+            update: UpdateSettings::default(),
         }
     }
 
@@ -249,6 +272,10 @@ impl Settings {
             field("pending_move").and_then(|v| serde_json::from_value::<PendingMove>(v).ok());
         let move_cleanup =
             field("move_cleanup").and_then(|v| serde_json::from_value::<MoveCleanup>(v).ok());
+        // 同意過連網檢查更新的要留著，不再問一次
+        let update = field("update")
+            .and_then(|v| serde_json::from_value::<UpdateSettings>(v).ok())
+            .unwrap_or_default();
         let s = Settings {
             device_id,
             storage,
@@ -258,6 +285,7 @@ impl Settings {
             translate,
             pending_move,
             move_cleanup,
+            update,
         };
         write_json_atomic(path, &s)?;
         Ok(s)
@@ -798,6 +826,15 @@ impl AppState {
         self.lock_settings().settings.prefs
     }
 
+    pub fn update_settings_get(&self) -> UpdateSettings {
+        self.lock_settings().settings.update.clone()
+    }
+
+    /// 改檢查更新的設定（同一把鎖裡讀最新的、改、寫回）。
+    pub fn update_settings_set(&self, change: impl FnOnce(&mut UpdateSettings)) -> ApiResult<()> {
+        self.update_settings(|s| change(&mut s.update))
+    }
+
     pub fn translate_settings(&self) -> TranslateSettings {
         self.lock_settings().settings.translate.clone()
     }
@@ -1043,17 +1080,6 @@ fn tree_bytes(dir: &Path) -> u64 {
             Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
             _ => 0,
         })
-        .sum()
-}
-
-/// 工作資料夾裡各個子資料夾的大小（還原寫出來的；不算最上層的暫存備份檔）。
-fn restored_bytes(work: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(work) else {
-        return 0;
-    };
-    rd.flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| tree_bytes(&e.path()))
         .sum()
 }
 
@@ -1452,9 +1478,14 @@ impl AppState {
             return Ok(None);
         }
         let staged = work.join(MOVE_LIBRARY);
-        let restored = watch_restore(work, bytes, m, || {
-            paperreader_core::backup::restore_backup(&zip, &staged, &device)
-        })?;
+        // 進度由還原自己回報。不要在旁邊另開執行緒走訪工作資料夾量大小：Windows 上那會讓還原最後的
+        // 改名撞上開著的資料夾、回 PermissionDenied
+        let restored = paperreader_core::backup::restore_backup_with_progress(
+            &zip,
+            &staged,
+            &device,
+            &mut |done, _| m.done.store(bytes + done.min(bytes), Ordering::SeqCst),
+        )?;
         m.done.store(bytes * 2, Ordering::SeqCst);
 
         // 3. 核對
@@ -1487,11 +1518,14 @@ impl AppState {
                 p.placed = true;
             }
         })?;
+        // 改名剛寫好、剛讀過的一整個資料夾：Windows 上別的程式（即時防毒、索引）還開著裡面的檔時會暫時被拒，
+        // 短暫重試
         if record.target_existed {
             // 開始時是空的資料夾（`absent_or_empty_dir`）：只刪空資料夾；失敗時由呼叫的一方建回來
-            std::fs::remove_dir(target).map_err(|e| io_error(target, e))?;
+            fsretry::retry_transient(|| std::fs::remove_dir(target))
+                .map_err(|e| io_error(target, e))?;
         }
-        std::fs::rename(&staged, target).map_err(|e| io_error(target, e))?;
+        fsretry::rename(&staged, target).map_err(|e| io_error(target, e))?;
         #[cfg(test)]
         if m.panic_after_rename.load(Ordering::SeqCst) {
             panic!("simulated: killed after the rename");
@@ -1534,7 +1568,7 @@ impl AppState {
         // 5. 刪舊的與暫存。刪不成不算失敗：新的已經在用（規則 5）；紀錄留著，下次開應用時接著刪
         self.set_move_step(MoveStep::Clean);
         hook(MoveStep::Clean, work);
-        let old_removed = self.finish_cleanup(Some(&src.root), Some(work));
+        let old_removed = self.finish_cleanup(Some(&src.root), Some(work), true);
         if !old_removed {
             eprintln!("paperreader: move_to_shared: the old library was not removed yet");
         }
@@ -1597,9 +1631,19 @@ impl AppState {
 
     /// 刪搬走之後的舊文獻庫與工作資料夾（`None` 的那一項不碰）；都處理完了才清掉「舊的還沒刪」，
     /// 交回舊的是不是不在了。
-    fn finish_cleanup(&self, old: Option<&Path>, work: Option<&Path>) -> bool {
+    ///
+    /// `retry`：Windows 上遇到暫時的鎖時短暫重試（搬完當下用；剛讀過舊的每個檔）。開應用時接著刪的那一條
+    /// 不重試：問狀況很頻繁、又握著文獻庫的鎖，舊的裡面有檔一直被別的程式開著時，每次都會多等。
+    fn finish_cleanup(&self, old: Option<&Path>, work: Option<&Path>, retry: bool) -> bool {
+        let remove = |p: &Path| {
+            if retry {
+                fsretry::remove_dir_all(p)
+            } else {
+                std::fs::remove_dir_all(p)
+            }
+        };
         let gone = |p: Option<&Path>| {
-            p.is_none_or(|p| match std::fs::remove_dir_all(p) {
+            p.is_none_or(|p| match remove(p) {
                 Ok(()) => true,
                 Err(e) => e.kind() == std::io::ErrorKind::NotFound || !p.exists(),
             })
@@ -1639,6 +1683,7 @@ impl AppState {
         self.finish_cleanup(
             old_ok.then_some(old.as_path()),
             work_ok.then_some(work.as_path()),
+            false,
         );
     }
 
@@ -1665,37 +1710,6 @@ impl AppState {
         }
         open
     }
-}
-
-/// 還原的時候在旁邊量工作資料夾寫出了多少（核心的還原沒有進度回報），做完就停。
-///
-/// 還原途中程式出錯（panic）時也要叫停量的那一條：否則 `scope` 一直等它、文獻庫的鎖一直握著，
-/// 整個應用卡住。叫停放在離開時一定會跑的地方。
-fn watch_restore(
-    work: &Path,
-    bytes: u64,
-    m: &MoveCtl,
-    restore: impl FnOnce() -> Result<paperreader_core::store::RestoreReport, LibError>,
-) -> ApiResult<paperreader_core::store::RestoreReport> {
-    struct StopOnExit<'a>(&'a AtomicBool, std::thread::Thread);
-    impl Drop for StopOnExit<'_> {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-            self.1.unpark();
-        }
-    }
-    let stop = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        let watcher = scope.spawn(|| {
-            while !stop.load(Ordering::SeqCst) {
-                let written = restored_bytes(work).min(bytes);
-                m.done.store(bytes + written, Ordering::SeqCst);
-                std::thread::park_timeout(std::time::Duration::from_millis(250));
-            }
-        });
-        let _stop = StopOnExit(&stop, watcher.thread().clone());
-        restore().map_err(ApiError::from)
-    })
 }
 
 /// 筆記檔的標題與連結文字（中文）。開啟文獻庫之後設定一次，不會寫進文獻庫。
@@ -3226,23 +3240,45 @@ mod tests {
         assert_eq!(move_cleanup(&st), None);
     }
 
+    /// 搬過去的那一份剛寫好，別的程式（即時防毒、索引）短暫開著裡面的檔：放到正式位置的改名等它放開，
+    /// 不算失敗。
+    #[cfg(windows)]
     #[test]
-    fn a_panic_while_restoring_does_not_hang() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let dir = tempfile::tempdir().unwrap();
-            let m = MoveCtl::default();
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                watch_restore(dir.path(), 10, &m, || -> Result<_, LibError> {
-                    panic!("simulated: restore broke")
-                })
-            }));
-            let _ = tx.send(r.is_err());
-        });
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(10)),
-            Ok(true)
-        );
+    fn a_file_briefly_held_in_the_moved_copy_does_not_fail_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (st, i, id) = filled_private(root);
+        let mut holder: Option<std::thread::JoinHandle<()>> = None;
+        let out = st
+            .move_to_shared(&i, &no_limit, &mut |step, work| {
+                if step == MoveStep::Switch {
+                    let f = work.join(MOVE_LIBRARY).join("library.json");
+                    let (opened_tx, opened_rx) = std::sync::mpsc::channel();
+                    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+                    holder = Some(std::thread::spawn(move || {
+                        let held = std::fs::File::open(&f).unwrap();
+                        opened_tx.send(()).unwrap();
+                        // 確認過鎖在之後才開始計時（主機慢時確認也不會落在放開之後）
+                        let _ = release_rx.recv();
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        drop(held);
+                    }));
+                    opened_rx.recv().unwrap();
+                    // 鎖確實在：不重試的改名會被拒
+                    let e =
+                        std::fs::rename(work.join(MOVE_LIBRARY), work.join("probe")).unwrap_err();
+                    assert_eq!(e.raw_os_error(), Some(5));
+                    release_tx.send(()).unwrap();
+                }
+            })
+            .unwrap();
+        holder.take().unwrap().join().unwrap();
+        assert!(!out.cancelled);
+        assert!(out.old_removed);
+        assert_eq!(st.storage(), Some(Storage::Shared));
+        assert_eq!(library_id(&st), id);
+        assert_eq!(pending(&st), None);
+        assert!(move_leftovers(root).is_empty());
     }
 
     #[cfg(windows)]

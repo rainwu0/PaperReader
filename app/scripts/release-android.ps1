@@ -6,6 +6,9 @@
 #   pwsh -NoProfile -File app\scripts\release-android.ps1 -Targets aarch64     只建 arm64
 #   在模擬器上驗：walkthrough.ps1 -Serial <模擬器> -Apk app\target\release-apk\PaperReader-<版本>-x86_64.apk
 #
+# 安裝檔名：PaperReader-<版號>-<架構>.apk，例 PaperReader-0.1.1-arm64.apk；修正版是 PaperReader-0.1.1.1-arm64.apk（對外的版號用點，不出現 +；規格\05 第 1、7 節）。
+# 版號用 app\scripts\bump-version.mjs 改；發布前這個腳本會先跑 version-check.mjs。
+#
 # 前提：
 #   - app\src-tauri\gen\android\keystore.properties 寫好金鑰檔的位置、別名與密碼（欄位見同一層的
 #     keystore.properties.example）。這個檔被 .gitignore 擋；缺了腳本會說明要做什麼再停下。
@@ -21,6 +24,16 @@ $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $app = Join-Path $repo 'app'
 $android = Join-Path $app 'src-tauri\gen\android'
 $props = Join-Path $android 'keystore.properties'
+
+# ---------- 0. 版號 ----------
+# 發布前先核對版號（規格\05_版號規則.md）：格式、三處一致、versionCode 照公式。不過就停。
+node (Join-Path $PSScriptRoot 'version-check.mjs')
+if ($LASTEXITCODE -ne 0) { Write-Host '版號檢查沒過，不建置。'; exit 1 }
+$conf = Get-Content (Join-Path $app 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
+# 對外的版號：設定檔的 a.b.c+d 換成 a.b.c.d（檔名、標籤、說明都用這個）
+$publicVersion = $conf.version.Replace('+', '.')
+Write-Host "版號 $publicVersion（設定檔 $($conf.version)），versionCode $($conf.bundle.android.versionCode)"
+Write-Host "安裝檔名：PaperReader-$publicVersion-<架構>.apk"
 
 # ---------- 1. 簽章設定 ----------
 if (-not (Test-Path $props)) {
@@ -56,7 +69,7 @@ $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Directo
 $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
 if (-not (Test-Path $apksigner)) { throw "找不到 apksigner：$apksigner" }
 
-$version = (Get-Content (Join-Path $app 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
+$version = $publicVersion   # 對外的版號（上面算好的）
 $abiOf = @{ aarch64 = 'arm64'; x86_64 = 'x86_64' }
 
 # ---------- 3. 建置 ----------

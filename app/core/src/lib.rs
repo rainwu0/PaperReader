@@ -5,6 +5,7 @@ pub mod citation;
 pub mod digest;
 pub mod error;
 pub mod format;
+pub mod fsretry;
 pub mod groups;
 pub mod ids;
 pub mod import;

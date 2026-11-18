@@ -16,6 +16,7 @@ import { readerStrings } from "./reader";
 import { syncStrings } from "./sync";
 import { translateStrings } from "./translate";
 import { translateSettingsStrings } from "./translateSettings";
+import { updateStrings } from "./update";
 
 const base = {
   // 共用
@@ -381,6 +382,7 @@ export const zhTW = {
   ...digestStrings,
   ...syncStrings,
   ...importStrings,
+  ...updateStrings,
 } as const;
 
 export type StringKey = keyof typeof zhTW;

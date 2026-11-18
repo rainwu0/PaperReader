@@ -7,6 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub fn build_client() -> reqwest::Client {
+    builder().build().expect("static client configuration")
+}
+
+/// 設好 TLS 與逾時的 builder，給要另外加限制的用途（應用內更新的轉址與 `Referer`）。
+pub fn builder() -> reqwest::ClientBuilder {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -20,6 +25,4 @@ pub fn build_client() -> reqwest::Client {
         .connect_timeout(Duration::from_secs(15))
         // 一批翻譯可能要等模型寫很久
         .timeout(Duration::from_secs(180))
-        .build()
-        .expect("static client configuration")
 }

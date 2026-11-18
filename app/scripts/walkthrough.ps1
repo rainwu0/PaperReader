@@ -56,9 +56,10 @@ if ($Apk) {
         npx tauri android build --apk --debug --target x86_64
         if ($LASTEXITCODE -ne 0) { throw 'APK 建置失敗' }
     }
-    $apk = Get-ChildItem $apkDir -Filter '*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $apk) { throw "找不到 APK：$apkDir" }
-    $env:PR_APK = $apk.FullName
+    # 不可以叫 $apk：PowerShell 的變數不分大小寫，會和字串型別的參數 $Apk 是同一個，檔案物件被轉成字串
+    $found = Get-ChildItem $apkDir -Filter '*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $found) { throw "找不到 APK：$apkDir" }
+    $env:PR_APK = $found.FullName
 }
 
 # 測試用的 PDF（合成的，放在 app\target\test-pdfs，不進版本庫）：沒有就產生

@@ -15,7 +15,8 @@ pub mod download;
 mod engines;
 mod error;
 pub mod glossary;
-mod http;
+/// 共用的 HTTP 用戶端（外殼的「檢查更新」也用它）。
+pub mod http;
 mod job;
 #[cfg(feature = "layout-model")]
 pub mod layout_model;
