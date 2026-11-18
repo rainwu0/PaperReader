@@ -14,9 +14,9 @@ import { topSheet, type Nav } from "../../nav";
 import { fillFromPdfInfo } from "../../pdfInfo";
 import { holdPerPaper } from "../../perPaperApp";
 import { errorDetail, errorMessage, t } from "../../strings";
-import { Button, Details, ResultSheet, Sheet, Spinner } from "../../ui/components";
+import { Button, Details, ResultSheet, Sheet, Spinner, type ShowUndo } from "../../ui/components";
 import { AnimatePresence, m, useMotion } from "../../ui/motion";
-import type { NoticeMore } from "./useAdd";
+import { removeAdded, restoreAll, type NoticeMore } from "./useAdd";
 import { skipLine } from "./importModel";
 
 export interface ImportUi {
@@ -33,7 +33,7 @@ type Notify = (title: string, message: string, more?: NoticeMore) => void;
 
 type Busy = { kind: "scan" } | { kind: "step"; done: number; total: number };
 
-export function useImport(lib: Library, nav: Nav, notify: Notify, addPdf: () => void): ImportUi {
+export function useImport(lib: Library, nav: Nav, notify: Notify, addPdf: () => void, undo: ShowUndo): ImportUi {
   const sheet = topSheet(nav.stack);
   const [busy, setBusy] = useState<Busy | null>(null);
   const busyRef = useRef(false);
@@ -215,6 +215,21 @@ export function useImport(lib: Library, nav: Nav, notify: Notify, addPdf: () => 
   };
 
   const close = () => void nav.back();
+
+  /** 結果面板的「移除這次加入的 n 篇」：關掉面板、移到回收區，提示給「復原」。 */
+  const removeImported = async (ids: string[]) => {
+    await nav.back();
+    try {
+      const done = await removeAdded(ids);
+      await lib.refresh().catch(() => {});
+      undo(t("bulk.removed", { n: done.length }), () => restoreAll(done));
+    } catch (e) {
+      await lib.refresh().catch(() => {});
+      const kind = kindOf(e);
+      notify(t("paper.remove.failed.title"), errorMessage(kind), { detail: errorDetail(kind) });
+    }
+  };
+
   const label =
     busy === null
       ? ""
@@ -285,6 +300,11 @@ export function useImport(lib: Library, nav: Nav, notify: Notify, addPdf: () => 
               </Details>
             ) : null}
             {report.not_done.length > 0 ? <p>{t("import.result.notDone", { n: report.not_done.length })}</p> : null}
+            {report.added.length > 0 ? (
+              <Button block onClick={() => void removeImported(report.added.map(([, id]) => id))}>
+                {t("add.batch.removeAdded", { n: report.added.length })}
+              </Button>
+            ) : null}
           </ResultSheet>
         ) : null}
       </AnimatePresence>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import { api, AppError, type Highlight, type PaperDetail, type ToolboxDock, type ToolboxMode } from "../../api";
+import { api, AppError, kindOf, type Highlight, type PaperDetail, type ToolboxDock, type ToolboxMode } from "../../api";
 import { isGeneratedPdf, lastDigest, sourcePdf } from "../../api/types";
 import { displayTitle } from "../../format";
 import { useBackOnTop, useViewportSize } from "../../hooks";
@@ -8,13 +8,13 @@ import type { PrefsState } from "../../prefs";
 import { errorDetail, errorMessage, t } from "../../strings";
 import { MATERIALS_CHANGED } from "../../translate/autoBuild";
 import { holdPerPaper } from "../../perPaperApp";
-import { BusyOverlay, Button, ConfirmSheet, Details, IconButton, Toast, type ToastData } from "../../ui/components";
+import { BusyOverlay, Button, Details, IconButton, Toast, type ToastData } from "../../ui/components";
 import { hintPending, markHintSeen, type HintId } from "../../hints";
 import { BackIcon, InfoIcon, ShareIcon } from "../../ui/icons";
 import { ExportSheet } from "../export/exportUi";
 import { AnimatePresence, fadeInElement, m as Motion, useMotion } from "../../ui/motion";
 import { NotesPane } from "./NotesPane";
-import { PdfView, type OutlineEntry, type SwitchPosition } from "./pdfView";
+import { PdfView, type OutlineEntry, type SwitchPosition, type ViewPosition } from "./pdfView";
 import { CompareView } from "./CompareView";
 import { DigestView } from "./DigestView";
 import { Toolbox, useToolboxKeepOpen, type ToolDef, type ToolboxLayout } from "./Toolbox";
@@ -44,6 +44,7 @@ import {
   BrushBar,
   brushStyleOf,
   HighlightEdit,
+  HighlightMenu,
   HintCard,
   JumpSheet,
   LoadingHint,
@@ -61,6 +62,8 @@ const DOUBLE_TAP_MS = 300; // 兩下點在這麼短的時間內、這麼近的�
 const DOUBLE_TAP_SLOP = 40; // 像素
 const READ_ERROR_AGAIN_MS = 10_000; // 讀不出來的提示收掉之後，又有頁讀不出來時隔多久再說一次
 const PEEK_H = 56; // 筆記窗格縮成一條時的高度
+const LONG_PRESS_MS = 500; // 按住劃線這麼久開小選單
+const LONG_PRESS_SLOP = 10; // 像素：手指移動超過這麼多就是在捲動，不算長按
 
 type LoadState =
   | { phase: "loading" }
@@ -117,6 +120,10 @@ export function Reader(props: {
   const readErrorAt = useRef(0);
   const [page, setPage] = useState(1);
   const [barVisible, setBarVisible] = useState(true);
+  const barVisibleRef = useRef(true);
+  useEffect(() => {
+    barVisibleRef.current = barVisible;
+  });
   const [saveNote, setSaveNote] = useState<string | null>(null);
   const failures = useRef(0);
   const noted = useRef(false);
@@ -126,6 +133,21 @@ export function Reader(props: {
     (_: ToastData | null, next: string | ToastData | null) => (typeof next === "string" ? { message: next } : next),
     null,
   );
+  // 跳到別處之後回得去：跳頁、大綱、筆記窗格的劃線、連結、重點筆記的頁碼跳過去之後，
+  // 頁面下方出現「回到第 n 頁」；按了回到跳之前的位置（含縮放），捲離落點兩頁以上就收
+  const [back, setBack] = useState<{ pos: ViewPosition; landing: number } | null>(null);
+  /** 在同一份材料裡跳過去：先記下現在的位置，跳完再記落點。 */
+  const jumpWithin = useCallback((go: () => void) => {
+    const view = viewRef.current;
+    if (!view || view.numPages === 0) {
+      go();
+      return;
+    }
+    const from = view.getPosition();
+    go();
+    const landing = view.getPosition().page;
+    setBack(landing === from.page ? null : { pos: from, landing });
+  }, []);
   // 首次提示：一次一則
   const [hint, setHint] = useState<HintId | null>(null);
   const offerHint = useCallback((id: HintId) => {
@@ -286,9 +308,11 @@ export function Reader(props: {
       scroll,
       wrap,
       onPage: (p) => setPage(p),
+      // 捲動與縮放時每一格（requestAnimationFrame 節流）都會來：只做便宜的事。頂列已經收起就不再設狀態
+      // （每格設一次會讓 React 每格都排一次更新），存位置的計時器停下兩秒才真的寫
       onMove: () => {
         moves.current += 1;
-        setBarVisible(false);
+        if (barVisibleRef.current) setBarVisible(false);
         // 捲動或縮放了：點一段的小框收起（正在改的不收）
         onMovedRef.current();
         window.clearTimeout(saveTimer.current);
@@ -407,13 +431,14 @@ export function Reader(props: {
         setMaterialId(source.id);
         return;
       }
-      if (d.page) viewRef.current?.goToPage(d.page);
+      const goPage = d.page;
+      if (goPage) jumpWithin(() => viewRef.current?.goToPage(goPage));
       const id = d.highlight;
       if (id) window.setTimeout(() => viewRef.current?.flash(id), FLASH_AFTER_MS);
     };
     window.addEventListener("pr-goto", on);
     return () => window.removeEventListener("pr-goto", on);
-  }, [paperId, source, materialId]);
+  }, [paperId, source, materialId, jumpWithin]);
 
   const total = load.phase === "ready" ? load.total : 0;
   const ready = load.phase === "ready";
@@ -443,8 +468,20 @@ export function Reader(props: {
     openDigest: () => nav.push({ name: "sheet", kind: "digest" }),
   });
   const { overlayActive, onSource } = views;
+  const hlPopOpen = props.sheets.includes("hlPop");
+  // 捲動時每格都會來：收起只做一次（返回還沒完成之前不再退一層）
+  const hlClosing = useRef(false);
   useEffect(() => {
-    onMovedRef.current = views.onMoved;
+    onMovedRef.current = () => {
+      views.onMoved();
+      // 捲動或縮放了：劃線的小選單收起（它對齊的位置已經不對）
+      if (hlPopOpen && !hlClosing.current) {
+        hlClosing.current = true;
+        void nav.back().finally(() => {
+          hlClosing.current = false;
+        });
+      }
+    };
   });
 
   // 從產生畫面來的：直接進疊加、譯文或重點筆記（只做一次）
@@ -487,15 +524,70 @@ export function Reader(props: {
   });
   const { selection, highlightMode } = hl;
 
+  // ---------- 長按劃線：一律開小選單，不受「點內容」開關影響 ----------
+  // 按下去時不讀版面（點在哪一條劃線上要量頁面的位置，手勢剛開始時會逼瀏覽器先排一次版面，雙指縮放因此變慢）：
+  // 只記下位置，按滿時限、手指沒動才判斷是不是在劃線上。移動與放開的監聽只在按著的這段時間掛
+  const press = useRef<{ x: number; y: number; timer: number; off: () => void } | null>(null);
+  const longPressAt = useRef(0);
+  const endPress = () => {
+    const p = press.current;
+    press.current = null;
+    if (!p) return;
+    window.clearTimeout(p.timer);
+    p.off();
+  };
+  useEffect(() => () => endPress(), []);
+  const onPressStart = (e: React.PointerEvent) => {
+    // 第二根手指放上來（雙指縮放）、筆刷開著、不是主要的按鍵：不算長按
+    if (press.current || brushOn || !e.isPrimary || e.button !== 0) {
+      endPress();
+      return;
+    }
+    const { clientX: x, clientY: y } = e;
+    const move = (ev: PointerEvent) => {
+      if (Math.hypot(ev.clientX - x, ev.clientY - y) > LONG_PRESS_SLOP) endPress();
+    };
+    const extra = () => endPress();
+    window.addEventListener("pointermove", move, { passive: true });
+    window.addEventListener("pointerup", extra, { passive: true });
+    window.addEventListener("pointercancel", extra, { passive: true });
+    window.addEventListener("pointerdown", extra, { passive: true, capture: true });
+    press.current = {
+      x,
+      y,
+      off: () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", extra);
+        window.removeEventListener("pointercancel", extra);
+        window.removeEventListener("pointerdown", extra, { capture: true });
+      },
+      timer: window.setTimeout(() => {
+        endPress();
+        if (Date.now() - longPressAt.current < 1000 || props.sheets.includes("hlPop")) return;
+        const id = hl.highlightIdAt(x, y);
+        if (!id) return;
+        longPressAt.current = Date.now();
+        hl.longPressHighlight(id, x, y);
+      }, LONG_PRESS_MS),
+    };
+  };
+
   // 點頁面：單擊要先等一下，確定不是雙擊；雙擊是放大到那一欄的寬度，再雙擊縮回（`PdfView.toggleColumnZoom`）。
   // 單擊：小框開著就收起；「點內容」開著時，點劃線開短評、點疊譯文暫看原文、點一段出小框；其餘顯示或隱藏頂列
   const lastTap = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
   useEffect(() => () => window.clearTimeout(lastTap.current?.timer), []);
   const singleTap = (x: number, y: number) => {
+    // 劃線的小選單開著：點別處只是收起它
+    if (props.sheets.includes("hlPop")) {
+      void nav.back();
+      return;
+    }
     if (!views.tap(x, y, () => hl.tapHighlight(x, y))) setBarVisible((v) => !v);
   };
   const onPageTap = (e: React.MouseEvent) => {
     if (brushOn) return;
+    // 長按劃線剛開了小選單：放開手指的那一下不算點（不然馬上又收起）
+    if (Date.now() - longPressAt.current < 700) return;
     if ((window.getSelection()?.toString() ?? "") !== "") return;
     const { clientX: x, clientY: y } = e;
     const prev = lastTap.current;
@@ -522,17 +614,36 @@ export function Reader(props: {
     viewRef.current?.setEraser(brushOn && brush.eraser);
   }, [brushOn, brush.eraser, ready, materialId]);
 
+  // 筆刷的「復原」只撤銷這次打開筆刷以來的動作：關掉時清空
+  const resetInkHistory = ink.resetHistory;
+  useEffect(() => {
+    if (!brushOn) resetInkHistory();
+  }, [brushOn, resetInkHistory]);
+
   const brushTool = () => {
     setBrushOn((v) => !v);
     hl.setSelection(null);
   };
 
+  /** 筆刷列的「復原」：撤銷畫面上看得到的頁上最後一個動作（畫的刪掉、擦的與清掉的畫回去）。 */
+  const undoInk = async () => {
+    const view = viewRef.current;
+    if (!view || !materialId) return;
+    const done = await ink.undo(materialId, view.visiblePages());
+    if (!done) setToast(t("reader.brush.nothingToUndo"));
+  };
+
+  /** 清除這一頁的筆跡：直接清，提示給「復原」（整頁畫回去）。 */
   const clearPage = async () => {
     const view = viewRef.current;
     if (!view || !materialId) return;
-    const pageIndex = view.getPosition().page - 1;
-    await nav.back();
-    await ink.clearPage(materialId, pageIndex);
+    const step = await ink.clearPage(materialId, view.getPosition().page - 1);
+    if (!step) return;
+    setToast({
+      message: t("reader.brush.cleared"),
+      keep: true,
+      action: { label: t("common.undo"), run: () => void inkRef.current.revert(step) },
+    });
   };
 
   // 這份材料的筆跡畫在頁面上
@@ -561,8 +672,10 @@ export function Reader(props: {
   /** 換到另一份材料（同一份就直接去），去某一段或某一頁；縮放沿用換之前的。 */
   const openAt = (m: string, target: { segment?: SegTarget; page?: number }) => {
     if (m === materialId) {
-      if (target.segment) viewRef.current?.showSegment(target.segment.page, target.segment.bbox);
-      else if (target.page) viewRef.current?.goToPage(target.page);
+      const seg = target.segment;
+      const pageNo = target.page;
+      if (seg) jumpWithin(() => viewRef.current?.showSegment(seg.page, seg.bbox));
+      else if (pageNo) jumpWithin(() => viewRef.current?.goToPage(pageNo));
       return;
     }
     savePosition();
@@ -583,7 +696,7 @@ export function Reader(props: {
     const target = await viewRef.current?.pageOfDest(entry.dest);
     if (target == null) return false;
     await nav.back();
-    viewRef.current?.goToPage(target);
+    jumpWithin(() => viewRef.current?.goToPage(target));
     return true;
   };
 
@@ -598,8 +711,63 @@ export function Reader(props: {
       setMaterialId(home);
       return;
     }
-    viewRef.current?.goToPage(h.page.index + 1);
+    jumpWithin(() => viewRef.current?.goToPage(h.page.index + 1));
     window.setTimeout(() => viewRef.current?.flash(h.id), FLASH_AFTER_MS);
+  };
+
+  // 「回到第 n 頁」：捲離落點兩頁以上、換了材料就收
+  useEffect(() => {
+    if (back && Math.abs(page - back.landing) >= 2) setBack(null);
+  }, [page, back]);
+  useEffect(() => {
+    setBack(null);
+  }, [materialId]);
+  const goBack = () => {
+    const b = back;
+    setBack(null);
+    if (b) viewRef.current?.restore(b.pos);
+  };
+
+  // ---------- 移除一份材料（譯本選單、重點筆記） ----------
+
+  /**
+   * 移到回收區，不先問，給「復原」。正在看的就是它（或疊譯文開著、要移除的是逐段譯文）時先回到原文。
+   * 復原：回收區裡這篇、這一項最晚移除的那一份放回來（核心的移除不交回回收區的資料夾名稱，和文獻資訊的做法相同）。
+   */
+  const removeMaterialHere = async (id: string) => {
+    const d = detailRef.current;
+    if (!d) return;
+    if (id === materialId || (id === views.overlayMat?.id && views.overlayActive)) {
+      views.showSource();
+      // 等這一份的檢視關掉，再把檔案移走（不讓它還在讀的那一段報讀不出來）
+      await new Promise((r) => window.setTimeout(r, 150));
+    }
+    try {
+      await api.removeMaterial(paperId, id, d.token);
+    } catch (e) {
+      refreshDetail();
+      setToast(errorMessage(kindOf(e)));
+      return;
+    }
+    refreshDetail();
+    onChangedRef.current();
+    setToast({
+      message: t("info.removed"),
+      keep: true,
+      action: {
+        label: t("common.undo"),
+        run: () =>
+          void (async () => {
+            const latest = (await api.listRemovedMaterials())
+              .filter((e) => e.paper_id === paperId && e.material.id === id)
+              .sort((a, b) => (b.removed_at ?? "").localeCompare(a.removed_at ?? ""))[0];
+            if (!latest) throw new AppError("NotFound", "removed material");
+            await api.restoreMaterial(latest.folder);
+            refreshDetail();
+            onChangedRef.current();
+          })().catch((e) => setToast(`${t("undo.failed.title")}：${errorMessage(kindOf(e))}`)),
+      },
+    });
   };
 
   // ---------- 筆記窗格：交給別的應用、回到前景時重讀 ----------
@@ -788,7 +956,26 @@ export function Reader(props: {
 
   return (
     <div className={readerClass} style={rootStyle}>
-      <div className="reader-scroll" ref={scrollRef} onClick={onPageTap} role="document" aria-label={title}>
+      <div
+        className="reader-scroll"
+        ref={scrollRef}
+        onClick={onPageTap}
+        onPointerDown={onPressStart}
+        onContextMenu={(e) => {
+          // 長按在劃線上：不出系統的選單，開劃線的小選單。系統認出長按時可能先取消了手指（`pointercancel`），
+          // 計時就不會到，所以這裡也開（兩邊誰先到都只開一次）
+          if (brushOn) return;
+          const id = hl.highlightIdAt(e.clientX, e.clientY);
+          if (!id) return;
+          e.preventDefault();
+          if (Date.now() - longPressAt.current < 1000 || props.sheets.includes("hlPop")) return;
+          endPress();
+          longPressAt.current = Date.now();
+          hl.longPressHighlight(id, e.clientX, e.clientY);
+        }}
+        role="document"
+        aria-label={title}
+      >
         <div className="reader-wrap" ref={wrapRef} />
       </div>
 
@@ -828,6 +1015,11 @@ export function Reader(props: {
           <span className="pill-face">{pill}</span>
         </button>
       ) : null}
+      {ready && back && !brushOn ? (
+        <button type="button" className="back-pill" onClick={goBack}>
+          {t("reader.back", { page: back.pos.page })}
+        </button>
+      ) : null}
 
       <AnimatePresence>
         {selection && !overlayActive && !brushOn && !highlightMode ? (
@@ -849,9 +1041,21 @@ export function Reader(props: {
             pick={brush}
             onPick={setBrush}
             aboveDock={dockedBottom}
-            onUndo={() => materialId && void ink.undo(materialId)}
-            onClear={() => nav.push({ name: "sheet", kind: "clearInk" })}
+            onUndo={() => void undoInk()}
+            onClear={() => void clearPage()}
             onFlip={flipPage}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {hlPopOpen && hl.menu ? (
+          <HighlightMenu
+            key="hl-menu"
+            highlight={hl.menu.highlight}
+            anchor={hl.menu.anchor}
+            onDelete={() => void hl.deleteFromMenu(hl.menu?.highlight.id ?? "")}
+            onComment={() => void hl.openComment(hl.menu?.highlight.id ?? "")}
           />
         ) : null}
       </AnimatePresence>
@@ -877,7 +1081,12 @@ export function Reader(props: {
         />
       ) : null}
 
-      <ViewsSheet open={props.sheets.includes("views")} options={viewOptions} onDismiss={() => void nav.back()} />
+      <ViewsSheet
+        open={props.sheets.includes("views")}
+        options={viewOptions}
+        onDismiss={() => void nav.back()}
+        onRemove={(id) => void nav.back().then(() => removeMaterialHere(id))}
+      />
 
       <AnimatePresence>
         {views.textOpen && views.textProps ? (
@@ -901,6 +1110,10 @@ export function Reader(props: {
             sheets={props.sheets}
             onClose={() => void nav.back()}
             onJump={(pageNo) => void nav.back().then(() => gotoSource(pageNo))}
+            onRemove={() => {
+              const id = digestMat.id;
+              void nav.back().then(() => removeMaterialHere(id));
+            }}
             focusPoint={props.target.point}
           />
         ) : null}
@@ -909,7 +1122,7 @@ export function Reader(props: {
       <JumpSheet
         open={props.sheets.includes("jump")}
         total={total}
-        onGo={(n) => void nav.back().then(() => viewRef.current?.goToPage(n))}
+        onGo={(n) => void nav.back().then(() => jumpWithin(() => viewRef.current?.goToPage(n)))}
         onCancel={() => void nav.back()}
       />
       <OutlineSheet
@@ -933,6 +1146,8 @@ export function Reader(props: {
             onSplit={(f) => updatePane({ split: Math.min(landscape ? 0.75 : 0.85, Math.max(landscape ? 0.25 : 0.2, f)) })}
             onClose={() => updatePane({ open: false })}
             onJump={(h) => void jumpToHighlight(h)}
+            onDelete={hl.removeHighlight}
+            hiddenIds={hl.pending}
             onMessage={setToast}
             onOpenExternal={(obsidian) => void openExternal(obsidian)}
           />
@@ -951,11 +1166,9 @@ export function Reader(props: {
               await nav.back();
             }}
             onDelete={async () => {
-              setBusy(true);
-              const m = await notes.remove(editing.id);
-              setBusy(false);
-              if (m) setToast(m);
+              const id = editing.id;
               await nav.back();
+              hl.removeHighlight(id);
             }}
             onCancel={() => void nav.back()}
           />
@@ -970,16 +1183,6 @@ export function Reader(props: {
           />
         ) : null}
       </AnimatePresence>
-      <ConfirmSheet
-        open={props.sheets.includes("clearInk")}
-        title={t("reader.brush.clearTitle")}
-        confirm={t("reader.brush.clearConfirm")}
-        onConfirm={() => void clearPage()}
-        onCancel={() => void nav.back()}
-      >
-        <p>{t("reader.brush.clearBody")}</p>
-      </ConfirmSheet>
-
       <BusyOverlay active={load.phase === "loading" || busy} label={t("reader.loading")} delayMs={1000} />
       {load.phase === "loading" ? <LoadingHint /> : null}
       <Toast toast={toast} onDone={() => setToast(null)} />

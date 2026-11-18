@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, kindOf, type Group, type Material, type PaperDetail, type ErrorKind, type ReadingProgress } from "../../api";
+import {
+  api,
+  AppError,
+  kindOf,
+  type BibDraft,
+  type Group,
+  type Material,
+  type PaperDetail,
+  type ErrorKind,
+  type ReadingProgress,
+} from "../../api";
 import { relativeDay, timeOfDay } from "../../format";
 import { ExtInfoSections } from "../../ext/InfoSections";
 import { BibFields, useBibForm } from "./BibFields";
@@ -10,12 +20,12 @@ import {
   BusyOverlay,
   Button,
   CheckRow,
-  ConfirmSheet,
   Details,
   ErrorNotice,
   InfoTip,
   Screen,
   Sheet,
+  type ShowUndo,
 } from "../../ui/components";
 import { useAddTranslation } from "../add/useAddTranslation";
 import { GroupNameSheet, GroupPickList } from "../home/groupUi";
@@ -66,6 +76,8 @@ export function PaperInfo(props: {
   onRemoved: (paperId: string) => void;
   /** 短暫的提示（App 的那一個）。 */
   toast: (message: string) => void;
+  /** 做完可以反做的動作（存書目、移除材料）：提示給「復原」。 */
+  undo: ShowUndo;
 }) {
   const { paperId, nav } = props;
   const { setGuard, push } = nav;
@@ -76,9 +88,8 @@ export function PaperInfo(props: {
   const [error, setError] = useState<InfoError | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingGroup, setPendingGroup] = useState<string | null>(null);
-  /** 正要移除的那一項材料（確認面板開著時）。 */
-  const [removing, setRemoving] = useState<Material | null>(null);
   const toast = props.toast;
+  const undo = props.undo;
 
   const load = useCallback(async () => {
     try {
@@ -182,12 +193,26 @@ export function PaperInfo(props: {
   const save = async (): Promise<boolean> => {
     if (!yearValid) return false;
     setBusy(true);
+    // 存之前的書目：「復原」時存回去
+    const before: BibDraft = {
+      title: bib.title ?? null,
+      authors: bib.authors,
+      year: bib.year ?? null,
+      venue: bib.venue ?? null,
+      doi: bib.doi ?? null,
+      url: bib.url ?? null,
+    };
     try {
       await api.updateBib(paperId, form.draft(bib), detail.token);
       // 以核心存好的樣子為準，重新讀回來顯示
       await load();
       props.onChanged();
-      toast(t("info.saved"));
+      undo(t("info.saved"), async () => {
+        // 版本記號在按「復原」時重新讀（存好之後已經換了）
+        const now = await api.getPaper(paperId);
+        await api.updateBib(paperId, before, now.token);
+        await load();
+      });
       return true;
     } catch (e) {
       const kind = kindOf(e);
@@ -233,26 +258,33 @@ export function PaperInfo(props: {
     if (memberFailed) setError({ message: t("group.name.memberFailed"), conflict: false });
   };
 
-  /** 移除一項材料：檔案移到回收區；之後以核心的結果重讀材料清單。 */
-  const removeMaterial = async () => {
-    if (!removing) return;
+  /**
+   * 移除一項材料：檔案移到回收區，不先問，給「復原」；之後以核心的結果重讀材料清單。
+   * 復原：回收區裡這篇、這一項最晚移除的那一份放回來（核心的移除不交回回收區的資料夾名稱）。
+   */
+  const removeMaterial = async (m: Material) => {
     setBusy(true);
     setError(null);
     try {
-      await api.removeMaterial(paperId, removing.id, detail.token);
-      await nav.back();
-      toast(t("info.removed"));
+      await api.removeMaterial(paperId, m.id, detail.token);
+      undo(t("info.removed"), async () => {
+        const latest = (await api.listRemovedMaterials())
+          .filter((e) => e.paper_id === paperId && e.material.id === m.id)
+          .sort((a, b) => (b.removed_at ?? "").localeCompare(a.removed_at ?? ""))[0];
+        if (!latest) throw new AppError("NotFound", "removed material");
+        await api.restoreMaterial(latest.folder);
+        await refreshDetail();
+      });
     } catch (e) {
-      await nav.back();
       setError(noticeOf(kindOf(e)));
     } finally {
       await refreshDetail();
       await props.onChanged();
-      setRemoving(null);
       setBusy(false);
     }
   };
 
+  /** 移除這篇（不先問）：回到首頁，首頁的提示給「復原」。 */
   const remove = async () => {
     setBusy(true);
     try {
@@ -371,13 +403,7 @@ export function PaperInfo(props: {
                 ) : null}
                 {m.role !== ROLE_SOURCE ? (
                   <div style={{ padding: "0 12px" }}>
-                    <Button
-                      disabled={readOnlyPaper}
-                      onClick={() => {
-                        setRemoving(m);
-                        push({ name: "sheet", kind: "removeMaterial" });
-                      }}
-                    >
+                    <Button disabled={readOnlyPaper || busy} onClick={() => void removeMaterial(m)}>
                       {t("services.remove")}
                     </Button>
                   </div>
@@ -424,34 +450,12 @@ export function PaperInfo(props: {
             {t("info.generate")}
           </Button>
           <div style={{ height: 12 }} />
-          <Button
-            block
-            onClick={() => push({ name: "sheet", kind: "removeConfirm" })}
-            disabled={readOnlyPaper}
-          >
+          <Button block onClick={() => void remove()} disabled={readOnlyPaper || busy}>
             {t("info.remove")}
           </Button>
         </div>
       </Screen>
 
-      <ConfirmSheet
-        open={props.sheet === "removeMaterial" && removing !== null}
-        title={t("info.material.removeTitle", { name: removing ? materialLabel(removing) : "" })}
-        confirm={t("services.remove")}
-        onConfirm={() => void removeMaterial()}
-        onCancel={() => void nav.back()}
-      >
-        <p>{t("info.material.removeBody")}</p>
-      </ConfirmSheet>
-      <ConfirmSheet
-        open={props.sheet === "removeConfirm"}
-        title={t("info.remove.confirmTitle")}
-        confirm={t("info.remove")}
-        onConfirm={() => void remove()}
-        onCancel={() => void nav.back()}
-      >
-        <p>{t("info.remove.confirmBody")}</p>
-      </ConfirmSheet>
       <Sheet open={props.sheet === "discardConfirm"} title={t("info.unsaved.title")} center onDismiss={() => void nav.back()}>
           <p>{t("info.unsaved.body")}</p>
           <div className="actions">

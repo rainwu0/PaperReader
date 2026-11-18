@@ -97,7 +97,6 @@ function LayoutModel(props: { wifiOnly: boolean }) {
           onDownload={() => void lm.download(props.wifiOnly)}
           onStop={lm.stop}
           {...(s.downloaded ? { onDelete: () => void lm.remove("") } : {})}
-          deleteAsk={{ title: t("layout.delete.title"), body: t("layout.delete.body") }}
         />
         {lm.note ? (
           <p className={lm.note.ok ? "gen-status" : "field-error"} role={lm.note.ok ? "status" : "alert"}>

@@ -27,6 +27,8 @@ export type SheetKind =
   | "compareMenu"
   | "segEdit"
   | "segPop"
+  /** 閱讀畫面：點一條劃線出的小選單（刪除、短評）。 */
+  | "hlPop"
   | "views"
   /** 閱讀畫面：重點筆記（蓋滿畫面）、刪一點的確認。 */
   | "digest"
@@ -39,11 +41,10 @@ export type SheetKind =
   | "addMenu"
   | "importSource"
   | "importResult"
-  /** 首頁與文獻資訊的群組：勾選清單、名稱輸入、列的選單、刪除確認。 */
+  /** 首頁與文獻資訊的群組：勾選清單、名稱輸入、列的選單（側邊欄裡一個群組的選單也是這一種）。 */
   | "groupPick"
   | "groupName"
   | "groupMenu"
-  | "groupDelete"
   /** 加入譯本的結果。 */
   | "translationResult"
   /** 設定的備份：匯出完成後怎麼交出、還原前的確認、結果。 */
@@ -54,27 +55,27 @@ export type SheetKind =
   | "moveIntro"
   | "moveConfirm"
   | "moveProgress"
-  /** 閱讀畫面：清除筆跡、一條劃線的短評。 */
-  | "clearInk"
+  /** 閱讀畫面：一條劃線的短評。 */
   | "highlightEdit"
   | "addIntro"
   | "inTrash"
   | "privateNotice"
   | "message"
-  | "removeConfirm"
-  /** 文獻資訊：移除一項材料的確認；回收區：永久刪除一項、全部清空的確認。 */
-  | "removeMaterial"
+  /** 回收區：永久刪除一項、全部清空的確認。 */
   | "purgeConfirm"
   | "emptyTrash"
-  /** 匯出與列印（文獻資訊、閱讀畫面）、書目匯出、首頁的多選與「放進群組」。 */
+  /** 匯出與列印（文獻資訊、閱讀畫面）、書目匯出、首頁的多選、多選的「更多動作」、「放進群組」、「移出群組」。 */
   | "exportMenu"
   | "bibExport"
   | "select"
+  | "selectMenu"
   | "bulkGroup"
+  | "bulkLeave"
   | "discardConfirm"
-  /** 翻譯設定：新增服務時選引擎、刪除服務的確認；檢查譯文：並排比較服務。 */
+  /** 翻譯設定：新增服務時選引擎、刪除服務的確認、清除金鑰的確認；檢查譯文：並排比較服務。 */
   | "serviceAdd"
   | "serviceDelete"
+  | "keyClear"
   | "compareServices"
   /** 同步包：匯出完成後怎麼交出、合併的結果；從另一台加入：說明與選位置、結果。 */
   | "syncDeliver"

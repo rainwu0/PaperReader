@@ -4,7 +4,7 @@
 // 材料的開啟、捲動、縮放仍由閱讀畫面與 `PdfView` 管；這裡只決定去哪裡。
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import type { Material } from "../../api";
+import { api, kindOf, type Material } from "../../api";
 import { FORM_OVERLAY, isGeneratedPdf, ROLE_TRANSLATION, sourcePdf } from "../../api/types";
 import { hasPageRegions, pageRegionsFor } from "../../ext/pageRegions";
 import type { RegionCard } from "../../ext/types";
@@ -12,7 +12,7 @@ import type { HintId } from "../../hints";
 import { hintPending } from "../../hints";
 import { isBool, useBackOnTop, useLocalPref } from "../../hooks";
 import type { Nav, SheetKind } from "../../nav";
-import { t } from "../../strings";
+import { errorMessage, t } from "../../strings";
 import { MATERIALS_CHANGED } from "../../translate/autoBuild";
 import type { ToastData } from "../../ui/components";
 import type { PdfView, SegmentBox } from "./pdfView";
@@ -194,17 +194,45 @@ export function useReaderViews(o: {
     else openPop(seg);
     return true;
   };
+  /**
+   * 就地改一段（譯文檢視與 PDF 上的小框共用）：存好之後給「復原」，把改之前的譯文與翻它的服務寫回去。
+   * 寫回去的仍記成使用者決定的（`by_user`）；「改回機器譯文」要核心另給操作（批三）。改之前沒有譯文（沒翻）的不給復原。
+   * 譯本 PDF 是由這份譯文產生的：提示說它還是改之前的（更新在譯文頁頂的那一列）。
+   */
+  const editWithUndo = async (id: string, text: string): Promise<string | null> => {
+    const before = doc?.segments.find((s) => s.id === id);
+    const message = await ov.edit(id, text);
+    if (message) return message;
+    const prev = before?.target && before.target.trim() !== "" ? before.target : null;
+    const said = rebuild.pdf ? t("reader.text.behind") : t("reader.text.saved");
+    const material = overlayMat?.id;
+    if (prev === null || !material) {
+      // 沒有可以寫回的：照原本的說法，有譯本 PDF 時直接給「更新譯本 PDF」（A5）
+      setToast(rebuild.pdf ? { message: said, action: { label: t("reader.text.rebuild"), run: rebuild.run } } : said);
+      return null;
+    }
+    const service = before?.service?.id ?? null;
+    setToast({
+      message: said,
+      keep: true,
+      action: {
+        label: t("common.undo"),
+        run: () =>
+          void api
+            .overlayApply(paperId, material, id, prev, service)
+            .then(() => ov.reload())
+            .catch((e) => setToast(`${t("undo.failed.title")}：${errorMessage(kindOf(e))}`)),
+      },
+    });
+    return null;
+  };
+  const overlayDoc = { ...ov, edit: editWithUndo };
+
   const savePop = async (text: string) => {
     if (!pop) return null;
-    const message = await ov.edit(pop.id, text);
+    const message = await editWithUndo(pop.id, text);
     if (message) return message;
     await nav.back();
-    // 譯本 PDF 還是改之前的：說一次，可以直接更新（A5）
-    setToast(
-      rebuild.pdf
-        ? { message: t("reader.text.behind"), action: { label: t("reader.text.rebuild"), run: rebuild.run } }
-        : t("reader.text.saved"),
-    );
     return null;
   };
   const popProps = popSeg && pop
@@ -283,7 +311,7 @@ export function useReaderViews(o: {
   const textProps = overlayMat
     ? {
         overlayId: overlayMat.id,
-        overlay: ov,
+        overlay: overlayDoc,
         startAt: textStart.current,
         onReading: (id: string) => (reading.current = id),
         onLayout: (id: string) => void layoutFromText(id),
@@ -345,9 +373,11 @@ export function useReaderViews(o: {
           remember(m.id);
           showPdf(m.id);
         }),
+        removable: m.id,
       });
     }
     if (overlayMat) {
+      // 原頁疊譯文與譯文用的是同一份逐段譯文：移除放在疊譯文那一列
       out.push({
         id: "overlay",
         label: t("reader.view.overlay"),
@@ -356,6 +386,8 @@ export function useReaderViews(o: {
           remember("overlay");
           showOverlay();
         }),
+        removable: overlayMat.id,
+        removeName: t("info.material.overlay"),
       });
       out.push({ id: "text", label: t("reader.view.text"), current: false, run: pick(openText) });
     }

@@ -9,7 +9,7 @@ export const ondeviceStrings = {
   "ondevice.download": "下載模型",
   "ondevice.delete": "刪除模型",
   "ondevice.deleteOther": "刪除 {name}",
-  "ondevice.deleted": "模型已刪除。",
+  "ondevice.deleted": "模型已刪除，要用時可以再下載。",
   "ondevice.downloaded": "模型已下載好。",
   "ondevice.downloading": "正在下載… {done} / {total}",
   "ondevice.cancelDownload": "停止下載",
@@ -26,6 +26,4 @@ export const ondeviceStrings = {
   "layout.title": "版面模型",
   "layout.about": "只用來把譯本分段分得更準；沒下載時照現行的方式。",
   "layout.ask.title": "下載版面模型？",
-  "layout.delete.title": "刪除版面模型？",
-  "layout.delete.body": "之後的譯本照現行的方式分段。",
 } as const;

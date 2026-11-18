@@ -19,7 +19,18 @@ import type { Library } from "../../library";
 import type { Nav, SheetKind } from "../../nav";
 import type { PrefsState } from "../../prefs";
 import { errorDetail, errorMessage, t, type StringKey } from "../../strings";
-import { Button, CheckRow, Choice, ChoiceList, Details, ErrorNotice, IconButton, Sheet, Spinner } from "../../ui/components";
+import {
+  Button,
+  CheckRow,
+  Choice,
+  ChoiceList,
+  Details,
+  ErrorNotice,
+  IconButton,
+  Sheet,
+  Spinner,
+  type ShowUndo,
+} from "../../ui/components";
 import { UpdateNotice } from "../update/UpdateNotice";
 import { CloseIcon, MenuIcon, PlusIcon, SearchIcon, StatusDot } from "../../ui/icons";
 import { Cover } from "./Cover";
@@ -162,6 +173,8 @@ export function Home(props: {
   notify: (title: string, message: string, more?: { detail?: string }) => void;
   /** 一則短暫的訊息（成功時用）。 */
   toast: (message: string) => void;
+  /** 做完可以反做的動作（移除、移出群組、標示為已讀、刪群組）：提示給「復原」。 */
+  undo: ShowUndo;
 }) {
   const { lib, nav, prefs } = props;
   const status = lib.status;
@@ -186,6 +199,7 @@ export function Home(props: {
     onView: props.onView,
     notify: props.notify,
     toast: props.toast,
+    undo: props.undo,
     onBulkDone: endSelect,
   });
 
@@ -286,13 +300,14 @@ export function Home(props: {
         <CloseIcon />
       </IconButton>
       <h1 aria-live="polite">{t("select.count", { n: selectedIds.length })}</h1>
+      {/* 常用的兩個放在頂列；其餘（移出群組、標示為已讀、匯出書目）收在「⋯」（360dp 寬放不下五個） */}
       <button
         type="button"
         className="topbar-text"
         disabled={selectedIds.length === 0}
-        onClick={() => actions.openBibExport(selectedIds, view.kind === "group" ? viewTitle(view, lib.groups) : null)}
+        onClick={() => actions.bulkRemove(selectedIds)}
       >
-        {t("bib.title")}
+        {t("paper.remove")}
       </button>
       <button
         type="button"
@@ -301,6 +316,15 @@ export function Home(props: {
         onClick={() => actions.openBulkGroup(selectedIds)}
       >
         {t("group.pick.title")}
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label={t("select.more")}
+        disabled={selectedIds.length === 0}
+        onClick={() => actions.openSelectMenu(selectedIds)}
+      >
+        <MoreIcon />
       </button>
     </Motion.header>
   ) : searchOpen ? (

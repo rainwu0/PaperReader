@@ -29,19 +29,65 @@ export function useHighlighting(o: {
   const [highlightMode, setHighlightMode] = useState(false);
   const [selection, setSelection] = useState<SelectionCapture | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
+  /** 點一條劃線出的小選單：哪一條、對齊畫面上的哪裡。 */
+  const [menu, setMenu] = useState<{ id: string; anchor: { left: number; top: number; right: number; bottom: number } } | null>(null);
 
-  // 這份材料（原文或譯本 PDF）上的劃線畫在頁面上。
+  // ---------- 刪除與復原一次 ----------
+  // 按「刪除」時先從畫面拿掉、出現「已刪除劃線 · 復原」（不自動消失）；提示「定了」（滑掉、點了別處、換成別的提示、
+  // 離開這一篇、應用退到背景，共用提示元件的 `onSettle`）才真的從筆記檔刪。按「復原」就什麼都沒改。
+  // 筆記檔沒有新的格式（刪除本來就有）；復原也不必重新加回去（重新加會換掉劃線的代號，連結就斷了）。
+  // 每一條各自定：連刪兩條時，前一則提示被換掉、前一條馬上刪，後一條仍可以復原。
+  const [pending, setPending] = useState<readonly string[]>([]);
+  const notesRef = useRef(notes);
+  useEffect(() => {
+    notesRef.current = notes;
+  });
+  const settled = useRef(new Set<string>());
+  /** 刪一條劃線（頁面上的小選單、短評面板、筆記窗格都用這個）：可以復原一次。 */
+  const removeHighlight = useCallback(
+    (id: string) => {
+      settled.current.delete(id);
+      setPending((cur) => (cur.includes(id) ? cur : [...cur, id]));
+      const drop = () => setPending((cur) => cur.filter((x) => x !== id));
+      setToast({
+        message: t("reader.highlight.deleted"),
+        keep: true,
+        action: { label: t("common.undo"), run: () => {} },
+        onSettle: (undone) => {
+          // 每一條只定一次（提示元件保證一則只呼叫一次；這裡再擋一次重複的刪除）
+          if (settled.current.has(id)) return;
+          settled.current.add(id);
+          if (undone) {
+            drop();
+            return;
+          }
+          void notesRef.current.remove(id).then((m) => {
+            drop();
+            if (m) setToast(t("reader.highlight.deleteFailed", { reason: m }));
+          });
+        },
+      });
+    },
+    [setToast],
+  );
+
+  // 這份材料（原文或譯本 PDF）上的劃線畫在頁面上（等著刪的不畫）。
   // 產生的譯本 PDF 重新產生過、譯文改了的地方，舊劃線的引句對不上：列為找不回（不畫、不刪，引句與短評仍在筆記裡）
   const lostToast = useRef<string | null>(null);
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !ready) return;
-    const mine = (notes.view?.doc.highlights ?? []).filter((h) => h.material === materialId);
+    const mine = (notes.view?.doc.highlights ?? []).filter((h) => h.material === materialId && !pending.includes(h.id));
     const draw = (lost: Set<string>) =>
       view.setHighlights(
         mine
           .filter((h) => !lost.has(h.id))
-          .map((h) => ({ id: h.id, n: h.page.index + 1, rects: h.rects, hasComment: h.comment.trim() !== "" })),
+          .map((h) => ({
+            id: h.id,
+            n: h.page.index + 1,
+            rects: h.rects,
+            hasComment: h.comment.trim() !== "",
+          })),
       );
     if (!o.generated || mine.length === 0) {
       draw(new Set());
@@ -66,7 +112,7 @@ export function useHighlighting(o: {
       cancelled = true;
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [notes.view, ready, materialId, o.generated]);
+  }, [notes.view, ready, materialId, o.generated, pending]);
 
   const create = useCallback(
     async (cap: SelectionCapture, withComment: boolean) => {
@@ -91,8 +137,18 @@ export function useHighlighting(o: {
       if (withComment && r.added) {
         setEditId(r.added.highlight.id);
         nav.push({ name: "sheet", kind: "highlightEdit" });
-      } else {
-        setToast(t("reader.highlight.saved"));
+      } else if (r.added) {
+        // 劃錯了（尤其劃線模式選字即劃）可以馬上復原：剛加的這條直接刪掉
+        const id = r.added.highlight.id;
+        setToast({
+          message: t("reader.highlight.saved"),
+          keep: true,
+          action: {
+            label: t("common.undo"),
+            run: () =>
+              void notesRef.current.remove(id).then((m) => m && setToast(t("reader.highlight.deleteFailed", { reason: m }))),
+          },
+        });
       }
     },
     [viewRef, notes, materialId, nav, setToast],
@@ -104,12 +160,25 @@ export function useHighlighting(o: {
     modeRef.current = { highlightMode, canMark: o.canMark };
   });
 
+  // 長按劃線開小選單時，瀏覽器同時開始選字：那一下的選取不算（不出「劃線」鈕，劃線模式也不再劃一條）
+  const suppressUntil = useRef(0);
+  const suppressSelection = (ms: number) => {
+    suppressUntil.current = Date.now() + ms;
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  };
+
   // 選字：瀏覽器原生的選取；選好之後（停下一會兒）出現「劃線」，劃線模式開著就直接劃
   useEffect(() => {
     if (!ready) return;
     let timer = 0;
     const onSel = () => {
       window.clearTimeout(timer);
+      if (Date.now() < suppressUntil.current) {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) sel.removeAllRanges();
+        return;
+      }
       timer = window.setTimeout(
         () => {
           const cap = o.brushOn ? null : (viewRef.current?.captureSelection() ?? null);
@@ -127,13 +196,43 @@ export function useHighlighting(o: {
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, o.brushOn]);
 
-  /** 點到一條劃線：開它的短評。點到的不是劃線交回 `false`。 */
+  /**
+   * 點到一條劃線：在它旁邊出小選單（刪除、短評），同類閱讀器的慣例。點到的不是劃線交回 `false`。
+   * 原頁疊譯文開著時劃線是蓋住的，不理。
+   */
   const tapHighlight = (x: number, y: number): boolean => {
-    const id = o.canMark ? viewRef.current?.highlightAt(x, y) : null;
+    const id = highlightIdAt(x, y);
     if (!id) return false;
+    openMenu(id, x, y);
+    return true;
+  };
+  /** 畫面上這一點落在哪一條劃線上（原頁疊譯文開著時劃線是蓋住的，不算）。 */
+  const highlightIdAt = (x: number, y: number): string | null => (o.canMark ? (viewRef.current?.highlightAt(x, y) ?? null) : null);
+  const openMenu = (id: string, x: number, y: number) => {
+    const anchor = viewRef.current?.highlightRect(id) ?? { left: x, top: y, right: x, bottom: y };
+    setMenu({ id, anchor });
+    nav.push({ name: "sheet", kind: "hlPop" });
+  };
+  /**
+   * 長按一條劃線：一律開小選單，不受「點內容」開關影響（劃線是使用者自己做的東西，要找得到移除）。
+   * 瀏覽器同時開始的選字取消掉。
+   */
+  const longPressHighlight = (id: string, x: number, y: number) => {
+    suppressSelection(1500);
+    window.setTimeout(() => window.getSelection()?.removeAllRanges(), 120);
+    openMenu(id, x, y);
+  };
+
+  /** 小選單的「短評」：換成短評面板（小選單那一層先退掉）。 */
+  const openComment = async (id: string) => {
+    await nav.back();
     setEditId(id);
     nav.push({ name: "sheet", kind: "highlightEdit" });
-    return true;
+  };
+  /** 小選單的「刪除」。 */
+  const deleteFromMenu = async (id: string) => {
+    await nav.back();
+    removeHighlight(id);
   };
 
   /** 「短評」工具：有選字就劃線並寫短評；沒有選字就用這一頁頁首附近的第一行當依據。 */
@@ -160,7 +259,26 @@ export function useHighlighting(o: {
     setHighlightMode(!highlightMode);
   };
 
-  const editing = editId ? (notes.view?.doc.highlights.find((h) => h.id === editId) ?? null) : null;
+  const editing = editId && !pending.includes(editId) ? (notes.view?.doc.highlights.find((h) => h.id === editId) ?? null) : null;
+  const menuHighlight =
+    menu && !pending.includes(menu.id) ? (notes.view?.doc.highlights.find((h) => h.id === menu.id) ?? null) : null;
 
-  return { highlightMode, selection, setSelection, create, tapHighlight, commentTool, highlightTool, editing };
+  return {
+    highlightMode,
+    selection,
+    setSelection,
+    create,
+    tapHighlight,
+    highlightIdAt,
+    longPressHighlight,
+    commentTool,
+    highlightTool,
+    editing,
+    menu: menuHighlight && menu ? { highlight: menuHighlight, anchor: menu.anchor } : null,
+    openComment,
+    deleteFromMenu,
+    removeHighlight,
+    /** 等著刪（還能復原）的：筆記窗格不列。 */
+    pending,
+  };
 }

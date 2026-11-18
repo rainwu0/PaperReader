@@ -23,7 +23,7 @@ import { fillFromPdfInfo } from "../../pdfInfo";
 import { holdPerPaper } from "../../perPaperApp";
 import { topSheet, type Nav } from "../../nav";
 import { errorDetail, errorMessage, t } from "../../strings";
-import { BusyOverlay, Button, ConfirmSheet, Details, ResultSheet, Sheet } from "../../ui/components";
+import { BusyOverlay, Button, ConfirmSheet, Details, ResultSheet, Sheet, type ShowUndo } from "../../ui/components";
 import { AnimatePresence } from "../../ui/motion";
 
 interface AddUi {
@@ -79,7 +79,39 @@ export function usePermissionGate<K>() {
   return { ask, take };
 }
 
-export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void): AddUi {
+/**
+ * 把剛加入的幾篇移到回收區（加入之後反悔）。一篇失敗不影響其他篇；全部沒移成就丟出最後一個錯誤。
+ * 交回移成的幾篇（復原時只還原這幾篇）。
+ */
+export async function removeAdded(ids: string[]): Promise<string[]> {
+  const done: string[] = [];
+  let error: unknown = null;
+  for (const id of ids) {
+    try {
+      await api.removePaper(id);
+      done.push(id);
+    } catch (e) {
+      error = e;
+    }
+  }
+  if (done.length === 0 && error !== null) throw error;
+  return done;
+}
+
+/** 復原「移除這次加入的」：一篇一篇還原，做完才丟出錯誤。 */
+export async function restoreAll(ids: string[]): Promise<void> {
+  let error: unknown = null;
+  for (const id of ids) {
+    try {
+      await api.restorePaper(id);
+    } catch (e) {
+      error = e;
+    }
+  }
+  if (error !== null) throw error;
+}
+
+export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void, onUndo: ShowUndo): AddUi {
   // 進行中的提示文字；`null` 是沒有在進行
   const [busy, setBusy] = useState<string | null>(null);
   const [trashPromptId, setTrashPromptId] = useState<string | null>(null);
@@ -134,7 +166,10 @@ export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void): 
         const only = r.items.length === 1 ? r.items[0] : undefined;
         if (only) {
           if (only.outcome === "added") {
-            onMessage(t("add.added"));
+            // 加錯了可以馬上反悔：「復原」把它移到回收區
+            const id = only.paperId;
+            if (id) onUndo(t("add.added"), () => api.removePaper(id));
+            else onMessage(t("add.added"));
             highlight(only.paperId);
           } else if (only.outcome === "already_present") {
             onMessage(t("add.alreadyPresent"));
@@ -157,8 +192,24 @@ export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void): 
         setBusy(null);
       }
     },
-    [lib, nav, onMessage, highlight, showError],
+    [lib, nav, onMessage, onUndo, highlight, showError],
   );
+
+  /** 結果面板的「移除這次加入的 n 篇」：關掉面板、移到回收區，提示給「復原」。 */
+  const removeBatch = async (ids: string[]) => {
+    await nav.back();
+    setBusy(t("common.working"));
+    try {
+      const done = await removeAdded(ids);
+      await lib.refresh();
+      onUndo(t("bulk.removed", { n: done.length }), () => restoreAll(done));
+    } catch (e) {
+      await lib.refresh();
+      showError(e, t("paper.remove.failed.title"));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const runPicker = useCallback(() => runBatch(api.addFromPicker), [runBatch]);
 
@@ -312,6 +363,7 @@ export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void): 
             onTrash={() => {
               void nav.back().then(() => nav.push({ name: "trash" }));
             }}
+            onRemoveAdded={(ids) => void removeBatch(ids)}
           />
         ) : null}
       </AnimatePresence>
@@ -365,10 +417,17 @@ export function useAdd(lib: Library, nav: Nav, onMessage: (m: string) => void): 
 }
 
 /** 一次加入多份之後的結果：幾篇加入、幾篇原本就在、幾篇失敗；失敗的可以展開看原因。 */
-function BatchResult(props: { items: AddItem[]; onDone: () => void; onTrash: () => void }) {
+function BatchResult(props: {
+  items: AddItem[];
+  onDone: () => void;
+  onTrash: () => void;
+  /** 加錯了：把這次加入的移到回收區。 */
+  onRemoveAdded: (ids: string[]) => void;
+}) {
   const count = (o: AddItem["outcome"]) => props.items.filter((i) => i.outcome === o).length;
   const failed = props.items.filter((i) => i.outcome === "failed");
   const inTrash = count("in_trash");
+  const addedIds = props.items.flatMap((i) => (i.outcome === "added" && i.paperId ? [i.paperId] : []));
   return (
     <ResultSheet
       open
@@ -390,6 +449,11 @@ function BatchResult(props: { items: AddItem[]; onDone: () => void; onTrash: () 
             ))}
           </ul>
         </Details>
+      ) : null}
+      {addedIds.length > 0 ? (
+        <Button block onClick={() => props.onRemoveAdded(addedIds)}>
+          {t("add.batch.removeAdded", { n: addedIds.length })}
+        </Button>
       ) : null}
     </ResultSheet>
   );

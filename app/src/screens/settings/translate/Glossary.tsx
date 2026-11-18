@@ -6,13 +6,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, kindOf, type GlossaryTerm } from "../../../api";
 import type { Nav } from "../../../nav";
 import { errorMessage, t } from "../../../strings";
-import { Button, Details, InfoTip, Screen } from "../../../ui/components";
+import { Button, Details, InfoTip, Screen, type ShowUndo } from "../../../ui/components";
 import { Section } from "../parts";
 
 const EMPTY: GlossaryTerm = { source: "", target: "", note: "" };
 
-export function GlossaryScreen(props: { nav: Nav; toast: (message: string) => void }) {
-  const { nav, toast: setToast } = props;
+export function GlossaryScreen(props: { nav: Nav; toast: (message: string) => void; undo: ShowUndo }) {
+  const { nav, toast: setToast, undo } = props;
   const [terms, setTerms] = useState<GlossaryTerm[] | null>(null);
   const [form, setForm] = useState<GlossaryTerm>(EMPTY);
   const [editing, setEditing] = useState<number | null>(null);
@@ -55,12 +55,22 @@ export function GlossaryScreen(props: { nav: Nav; toast: (message: string) => vo
     if (await save(next)) setForm(EMPTY);
   };
 
+  /** 復原：把整份清單存回去（畫面可能已經關了，所以只在還開著時更新清單）。 */
+  const restore = async (list: GlossaryTerm[]) => {
+    await api.glossarySet(list);
+    setTerms(list);
+  };
+
   const importTsv = async () => {
     try {
+      // 匯入之前的清單：「復原」時存回去
+      const before = await api.glossaryGet();
       const r = await api.glossaryImport();
       if (r.cancelled) return;
       await load();
-      setToast(t("glossary.imported", { added: r.added, updated: r.updated, skipped: r.skipped }));
+      const message = t("glossary.imported", { added: r.added, updated: r.updated, skipped: r.skipped });
+      if (r.added + r.updated > 0) undo(message, () => restore(before));
+      else setToast(message);
     } catch (e) {
       setNote({ text: t("glossary.importFailed"), detail: errorMessage(kindOf(e)) });
     }
@@ -167,7 +177,13 @@ export function GlossaryScreen(props: { nav: Nav; toast: (message: string) => vo
                   </Button>
                   <Button
                     onClick={async () => {
-                      if (terms && (await save(terms.filter((_, j) => j !== i)))) setEditing(null);
+                      if (!terms) return;
+                      // 刪了直接生效，提示給「復原」：存回刪之前的整份清單
+                      const before = terms;
+                      if (await save(terms.filter((_, j) => j !== i))) {
+                        setEditing(null);
+                        undo(t("glossary.deletedOne"), () => restore(before));
+                      }
                     }}
                   >
                     {t("glossary.delete")}

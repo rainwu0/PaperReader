@@ -34,8 +34,6 @@ export const homeStrings = {
   "group.name.tooLong": "名稱最多 100 個字。",
   "group.name.duplicate": "已經有同名的群組。",
   "group.name.memberFailed": "群組已建立，但這篇沒有放進去。",
-  "group.delete.title": "刪除這個群組？",
-  "group.delete.body": "裡面的文獻不會被刪除。",
   "group.delete.failed.title": "沒有刪除群組",
   "group.delete.skipped.title": "群組已刪除",
   "group.delete.skipped": "{n} 篇的群組記錄暫時沒更新，不影響閱讀。",

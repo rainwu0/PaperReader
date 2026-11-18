@@ -5,7 +5,17 @@ import { useState } from "react";
 import { api, kindOf, type TranslateServiceView, type TranslateTestResult } from "../../../api";
 import type { Nav, SheetKind } from "../../../nav";
 import { errorMessage, t, type StringKey } from "../../../strings";
-import { Button, Details, ErrorNotice, InfoTip, Screen, Sheet, TopBar } from "../../../ui/components";
+import {
+  Button,
+  ConfirmSheet,
+  Details,
+  ErrorNotice,
+  InfoTip,
+  Screen,
+  Sheet,
+  TopBar,
+  type ShowUndo,
+} from "../../../ui/components";
 import { engineOf, serviceName, useEngines } from "../../generate/engines";
 import { EngineModel, useOnDevice } from "../../generate/localEngine";
 import { isInsecureRemote } from "../../generate/translateConfig";
@@ -30,7 +40,7 @@ function TestOk(props: { r: TranslateTestResult; engine: string }) {
   );
 }
 
-export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: SheetKind | null }) {
+export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: SheetKind | null; undo: ShowUndo }) {
   const { nav, id } = props;
   const st = useTranslateSettings();
   const engines = useEngines();
@@ -130,6 +140,28 @@ export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: She
     await nav.back(); // 關掉確認框
     const ok = await st.run(() => api.deleteTranslateService(id));
     if (ok) await nav.back();
+  };
+
+  /** 還原預設：直接做，提示給「復原」（存回原本的設定；金鑰另外存，不受影響）。 */
+  const reset = async () => {
+    if (busy) return;
+    const before = strip(svc);
+    setBusy(true);
+    setResult(null);
+    setTested(null);
+    const ok = await st.run(() => api.resetTranslateService(id));
+    setBusy(false);
+    if (ok) {
+      props.undo(t("prompts.resetDone"), async () => {
+        await api.saveTranslateService(before);
+        await st.reload();
+      });
+    }
+  };
+
+  const clearKey = async () => {
+    await nav.back(); // 關掉確認框
+    await act(() => api.clearTranslateKey(id), "settings.generate.keyCleared");
   };
 
   const field = (k: keyof typeof draft) => ({
@@ -240,7 +272,8 @@ export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: She
                     >
                       {t("settings.generate.keySave")}
                     </Button>
-                    <Button disabled={!svc.hasKey || busy} onClick={() => void act(() => api.clearTranslateKey(id), "settings.generate.keyCleared")}>
+                    {/* 金鑰讀不回來，清了就沒辦法復原：先確認一次 */}
+                    <Button disabled={!svc.hasKey || busy} onClick={() => nav.push({ name: "sheet", kind: "keyClear" })}>
                       {t("settings.generate.keyClear")}
                     </Button>
                   </div>
@@ -302,7 +335,7 @@ export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: She
               <Button primary block disabled={busy} onClick={() => void runTest()}>
                 {busy ? t("settings.generate.testing") : t("services.test")}
               </Button>
-              <Button block disabled={busy} onClick={() => void act(() => api.resetTranslateService(id), "services.resetDone")}>
+              <Button block disabled={busy} onClick={() => void reset()}>
                 {t("services.reset")}
               </Button>
               <Button block disabled={busy || v.services.length <= 1} onClick={() => nav.push({ name: "sheet", kind: "serviceDelete" })}>
@@ -340,6 +373,15 @@ export function TranslateServiceScreen(props: { nav: Nav; id: string; sheet: She
           </Button>
         </div>
       </Sheet>
+      <ConfirmSheet
+        open={props.sheet === "keyClear"}
+        title={t("key.clear.title")}
+        confirm={t("settings.generate.keyClear")}
+        onConfirm={() => void clearKey()}
+        onCancel={() => void nav.back()}
+      >
+        <p>{t("key.clear.body")}</p>
+      </ConfirmSheet>
     </div>
   );
 }

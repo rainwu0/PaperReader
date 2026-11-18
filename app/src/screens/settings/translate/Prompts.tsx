@@ -6,7 +6,7 @@ import { useState } from "react";
 import { api, type PresetKind, type PromptPreset, type PromptPresetView } from "../../../api";
 import type { Nav } from "../../../nav";
 import { errorMessage, t, type StringKey } from "../../../strings";
-import { Button, ErrorNotice, InfoTip, Screen, Segmented } from "../../../ui/components";
+import { Button, ErrorNotice, InfoTip, Screen, Segmented, type ShowUndo } from "../../../ui/components";
 import { Section } from "../parts";
 import { PromptEditor } from "./PromptEditor";
 import { useTranslateSettings } from "./useTranslateSettings";
@@ -29,7 +29,7 @@ function newId(): string {
   return `custom_${Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, "")}`;
 }
 
-export function TranslatePrompts(props: { nav: Nav }) {
+export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
   const { nav } = props;
   const st = useTranslateSettings();
   const [start] = useState(() => {
@@ -66,6 +66,27 @@ export function TranslatePrompts(props: { nav: Nav }) {
   const copy = (p: PromptPreset) => {
     const id = newId();
     void act(() => api.savePrompt({ ...p, id }), "prompts.saved", () => setOpen(id));
+  };
+
+  /**
+   * 刪一組自訂的，或把改過的內建組還原預設：直接做，提示給「復原」。
+   * 復原把原本那一組存回去；刪掉的是產生時預設用的那一組時（外殼改回了內建的），選擇也改回來。
+   */
+  const remove = async (p: PromptPresetView) => {
+    if (busy) return;
+    setBusy(true);
+    setNote(null);
+    const wasSelected = selected === p.id;
+    const ok = await st.run(() => api.deletePrompt(p.id));
+    setBusy(false);
+    if (!ok) return;
+    if (!p.builtin) setOpen(null);
+    const original: PromptPreset = { id: p.id, name: p.name, kind: p.kind, text: p.text, sections: p.sections };
+    props.undo(p.builtin ? t("prompts.resetDone") : t("prompts.deletedOne", { name: presetName(p) }), async () => {
+      await api.savePrompt(original);
+      if (wasSelected) await api.patchTranslateSettings(p.kind === "translation" ? { prompt: p.id } : { digestPrompt: p.id });
+      await st.reload();
+    });
   };
 
   const addNew = () => {
@@ -141,13 +162,7 @@ export function TranslatePrompts(props: { nav: Nav }) {
                   busy={busy}
                   onSave={(d) => void act(() => api.savePrompt(d), "prompts.saved")}
                   onCopy={copy}
-                  onRemove={() =>
-                    void act(
-                      () => api.deletePrompt(p.id),
-                      p.builtin ? "prompts.resetDone" : "prompts.deleted",
-                      () => !p.builtin && setOpen(null),
-                    )
-                  }
+                  onRemove={() => void remove(p)}
                 />
               ) : null}
             </div>

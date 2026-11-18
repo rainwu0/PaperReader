@@ -149,8 +149,16 @@ button {
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding-bottom: calc(24px + var(--inset-bottom));
+  /* 提示（Toast）占了下緣時，清單的尾端讓出它的高度，最後一列才按得到（--toast-h 由提示設） */
+  padding-bottom: calc(24px + var(--inset-bottom) + var(--toast-h, 0px));
+  transition: padding-bottom 160ms ease;
   -webkit-overflow-scrolling: touch;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll {
+    transition: none;
+  }
 }
 
 .content {
@@ -803,6 +811,11 @@ p {
   background: var(--paper);
   color: var(--text);
   font-size: var(--fs-sm);
+}
+
+/* 留著的提示（帶「復原」）可以往旁邊滑掉：手指在它上面時不交給捲動 */
+.toast.keep {
+  touch-action: none;
 }
 
 .toast-text {

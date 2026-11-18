@@ -30,7 +30,12 @@ export const readerStrings = {
 
   // 劃線
   "reader.highlight.withComment": "劃線並寫短評",
-  "reader.highlight.saved": "已劃線",
+  "reader.highlight.saved": "已劃線。點一下劃線可以刪除或寫短評。",
+  "reader.highlight.menu": "這條劃線",
+  "reader.highlight.delete": "刪除",
+  "reader.highlight.comment": "短評",
+  "reader.highlight.deleted": "已刪除劃線",
+  "reader.highlight.deleteFailed": "劃線沒有刪掉：{reason}",
   "reader.highlightMode.on": "劃線模式：選字即劃線",
   "reader.highlightMode.off": "劃線模式已關閉",
   "reader.highlight.lost": "{n} 條劃線找不到原位置，引句與短評仍在筆記。",
@@ -39,7 +44,9 @@ export const readerStrings = {
   "reader.edit.title": "劃線與短評",
   "reader.edit.hint": "寫一兩句話…",
   "reader.edit.delete": "刪除這條劃線",
-  "reader.edit.deleteConfirm": "再按一次刪除（無法復原）",
+
+  // 跳到別處之後（大綱、跳頁、筆記窗格、連結）
+  "reader.back": "回到第 {page} 頁",
 
   // 首次提示：不明顯的手勢第一次用到時說一次
   "hint.select": "長按文字可以選取，放開後按「劃線」。",
@@ -74,6 +81,8 @@ export const readerStrings = {
   "reader.notes.fmt.list": "清單",
   "reader.notes.fmt.quote": "引用",
   "reader.notes.fmt.link": "連結",
+  "reader.notes.fmt.undo": "復原",
+  "reader.notes.fmt.redo": "重做",
   "reader.notes.mode": "編輯或預覽",
   "reader.notes.edit.mode": "編輯",
   "reader.notes.preview.mode": "預覽",
@@ -83,6 +92,7 @@ export const readerStrings = {
   "reader.notes.empty": "還沒有劃線。長按文字就能劃線。",
   "reader.notes.noComment": "（沒有短評）",
   "reader.notes.edit": "寫或改{page}這條劃線的短評",
+  "reader.notes.delete": "刪除{page}這條劃線",
   "reader.notes.unreadable": "筆記檔裡有 {n} 處讀不懂，仍留在檔案裡。",
   "reader.notes.incomplete": "這一條的結尾標記不見了，只能看、不能改。",
   "reader.notes.conflict": "筆記檔在別處改過，已重新讀取；剛才的修改沒有存進去。",
@@ -101,12 +111,11 @@ export const readerStrings = {
   "reader.brush.thin": "細線",
   "reader.brush.thick": "粗線",
   "reader.brush.eraser": "橡皮擦",
-  "reader.brush.undo": "復原上一筆",
+  "reader.brush.undo": "復原",
+  "reader.brush.nothingToUndo": "畫面上的這幾頁沒有可以復原的筆跡動作。",
   "reader.brush.prev": "上一頁",
   "reader.brush.next": "下一頁",
-  "reader.brush.clearTitle": "清除這一頁的筆跡？",
-  "reader.brush.clearBody": "這一頁的筆跡會全部刪除，無法復原。",
-  "reader.brush.clearConfirm": "清除這一頁",
   "reader.brush.clear": "清除這一頁的筆跡",
+  "reader.brush.cleared": "已清除這一頁的筆跡",
   "reader.brush.failed": "筆跡沒有存下來。",
 } as const;

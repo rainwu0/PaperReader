@@ -28,6 +28,8 @@ export function DigestView(props: {
   sheets: SheetKind[];
   /** 打開時捲到這一點、閃一下（首頁搜尋的「內文」來的）。 */
   focusPoint?: string | undefined;
+  /** 移除這份重點筆記（移到回收區；由閱讀畫面關掉這一層、給「復原」）。 */
+  onRemove?: () => void;
 }) {
   const view = useMotion("view");
   const exiting = useExitingStyle();
@@ -221,6 +223,11 @@ export function DigestView(props: {
               <Button block onClick={() => void openWith()}>
                 {t("digest.view.openWith")}
               </Button>
+              {props.onRemove ? (
+                <Button block onClick={props.onRemove}>
+                  {t("digest.view.remove")}
+                </Button>
+              ) : null}
             </div>
           </>
         ) : null}

@@ -31,7 +31,7 @@ import { useImport } from "./screens/add/useImport";
 import { ImportPreviewScreen } from "./screens/add/ImportPreview";
 import { Trash } from "./screens/settings/Trash";
 import { errorDetail, errorMessage, t } from "./strings";
-import { Toast, type ToastData } from "./ui/components";
+import { Toast, type ShowUndo, type ToastData } from "./ui/components";
 import { AnimatePresence, m, MotionRoot, useExitingStyle, useMotion } from "./ui/motion";
 import { Help } from "./screens/settings/Help";
 import { Update } from "./screens/update/Update";
@@ -67,7 +67,24 @@ export function App() {
   });
   /** 短暫的提示：各畫面共用這一個。 */
   const showToast = (message: string) => setToast({ message });
-  const add = useAdd(lib, nav, showToast);
+  /** 做完可以反做的動作：「…· 復原」，留到使用者處理。 */
+  const showUndo: ShowUndo = (message, revert) =>
+    setToast({
+      message,
+      keep: true,
+      action: {
+        label: t("common.undo"),
+        run: () => {
+          revert()
+            .then(() => lib.refresh())
+            .catch((e: unknown) => {
+              void lib.refresh();
+              notifyRef.current(t("undo.failed.title"), errorMessage(kindOf(e)), { detail: errorDetail(kindOf(e)) });
+            });
+        },
+      },
+    });
+  const add = useAdd(lib, nav, showToast, showUndo);
   notifyRef.current = add.notify;
   // 首頁目前看的是哪一批文獻（全部文獻、未分組、某個群組）
   const [view, setView] = useState<View>(ALL_VIEW);
@@ -77,7 +94,7 @@ export function App() {
   // 同步包與從另一台加入：匯入、加入完成後重讀目錄並重新檢查（首頁跟著更新）
   const sync = useSync(lib, nav, () => void checks.run(true), add.notify);
   const join = useJoin(lib, nav, add.notify, () => void checks.run(true));
-  const imp = useImport(lib, nav, add.notify, add.start);
+  const imp = useImport(lib, nav, add.notify, add.start, showUndo);
 
   // 打開應用時先到哪裡：設定選「上次讀的那一篇」就直接開那一篇（只在啟動時做一次）
   const startupDone = useRef(false);
@@ -227,24 +244,7 @@ export function App() {
   }, [depth]);
 
   /** 移除之後回到首頁：顯示「已移到回收區」與「復原」。 */
-  const onRemoved = (paperId: string) => {
-    setToast({
-      message: t("info.removed"),
-      action: {
-        label: t("common.undo"),
-        run: () => {
-          api
-            .restorePaper(paperId)
-            .then(() => lib.refresh())
-            .catch((e: unknown) =>
-              add.notify(t("add.restoreFailed.title"), errorMessage(kindOf(e)), {
-                detail: errorDetail(kindOf(e)),
-              }),
-            );
-        },
-      },
-    });
-  };
+  const onRemoved = (paperId: string) => showUndo(t("info.removed"), () => api.restorePaper(paperId));
 
   const render = (r: Route, sheets: SheetKind[]) => {
     // 說明框（tip）疊在面板上時，面板仍是開著的那一個
@@ -268,6 +268,7 @@ export function App() {
             highlightId={add.highlightId}
             notify={add.notify}
             toast={showToast}
+            undo={showUndo}
           />
         );
       case "reader":
@@ -313,6 +314,7 @@ export function App() {
             onChanged={() => lib.refresh()}
             onRemoved={onRemoved}
             toast={showToast}
+            undo={showUndo}
           />
         );
       case "settings":
@@ -340,11 +342,11 @@ export function App() {
       case "translateServices":
         return <TranslateServices nav={nav} sheet={ownerSheet} />;
       case "translateService":
-        return <TranslateServiceScreen nav={nav} id={r.id} sheet={ownerSheet} />;
+        return <TranslateServiceScreen nav={nav} id={r.id} sheet={ownerSheet} undo={showUndo} />;
       case "translatePrompts":
-        return <TranslatePrompts nav={nav} />;
+        return <TranslatePrompts nav={nav} undo={showUndo} />;
       case "glossary":
-        return <GlossaryScreen nav={nav} toast={showToast} />;
+        return <GlossaryScreen nav={nav} toast={showToast} undo={showUndo} />;
       case "trash":
         return (
           <Trash nav={nav} sheet={ownerSheet} papers={lib.papers} onChanged={() => void lib.refresh()} toast={showToast} />

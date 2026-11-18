@@ -29,7 +29,16 @@ export type { SelectionCapture } from "./pdfSelection";
 const PAD = 8; // 縮放 1 倍時的邊距與頁間距（CSS 像素）
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-const MAX_CANVAS_PIXELS = 12_000_000;
+/**
+ * 一頁畫布最多幾個像素（超過就降低清晰度）。原本 1,200 萬（每頁約 48 MB），放大後上下預先畫的幾頁加起來很重；
+ * PDF.js 官方檢視器在手機上限 524 萬（`web/app_options.js` 的 `maxCanvasPixels`，再用局部的細節畫布補清晰度）。
+ * 這裡沒有局部畫布，取 800 萬：放大到 2.5 倍仍接近螢幕的像素比，4 倍時略降。
+ */
+const MAX_CANVAS_PIXELS = 8_000_000;
+/** 畫面上下各預先畫多遠（畫面高度的比例）。原本 1.2，縮放 1 倍時一次畫 8 到 10 頁；PDF.js 只多畫前後一頁。 */
+const PRELOAD = 0.6;
+/** 雙擊放大與縮回的過場（毫秒）；系統開了「移除動畫」時直接換。 */
+const ZOOM_ANIM_MS = 220;
 /** 雙擊放大算不出欄時的縮放：頁寬的兩倍（縮放 1 倍是頁寬剛好填滿畫面）。 */
 const FALLBACK_ZOOM = 2;
 
@@ -81,8 +90,15 @@ interface PageSlot {
   box: HTMLDivElement;
   rendered: boolean;
   token: number;
-  /** 畫好的這一頁的座標換算（頁面座標 ⇄ 畫面像素）。 */
+  /**
+   * 畫好的這一頁的座標換算（頁面座標 ⇄ 畫好時的畫面像素）。換了縮放、新的比例還沒畫好時（`k` 不是 1），
+   * 頁框已經是新的大小，裡面幾層暫時用 CSS 放大 `k` 倍撐著（`.pg.stale`）：畫面上的位置是這裡換出來的乘上 `k`。
+   */
   viewport: pdfjs.PageViewport | null;
+  /** 頁框的大小是畫好時的幾倍（1 是不必重畫）。 */
+  k: number;
+  /** 文字層（PDF.js 的物件）：換縮放時更新比例就好，不重新向 worker 要文字、不重建。 */
+  textLayerObj: pdfjs.TextLayer | null;
   hlLayer: HTMLDivElement | null;
   textLayer: HTMLDivElement | null;
   strokeCanvas: HTMLCanvasElement | null;
@@ -136,6 +152,10 @@ export class PdfView {
   private lastSwitch: SwitchPosition | null = null;
   private queue: number[] = [];
   private rendering = false;
+  /** 正在畫的那一頁（換縮放時取消：它的比例已經不對了）。 */
+  private renderTask: { slot: PageSlot; task: pdfjs.RenderTask } | null = null;
+  /** 雙指縮放或雙擊放大的過場進行中：「看得到哪幾頁」的判斷暫停（內容在做 transform，量到的不是真的位置）。 */
+  private gesturing = false;
   private destroyed = false;
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -296,6 +316,20 @@ export class PdfView {
     return { page: slot.n, offset, zoom: this.zoom, left };
   }
 
+  /** 畫面上看得到（有一部分在畫面裡）的頁，頁序從 0 起（筆刷的「復原」只撤銷這幾頁上的動作）。 */
+  visiblePages(): number[] {
+    const sc = this.o.scroll;
+    const top = sc.scrollTop;
+    const bottom = top + sc.clientHeight;
+    const out: number[] = [];
+    for (const slot of this.slots) {
+      const y0 = slot.box.offsetTop;
+      if (y0 > bottom) break;
+      if (y0 + slot.box.offsetHeight >= top) out.push(slot.n - 1);
+    }
+    return out;
+  }
+
   /** 切換用的位置：畫面中線在哪一頁的哪個高度、水平捲到哪、縮放多少。 */
   getSwitchPosition(): SwitchPosition {
     const sc = this.o.scroll;
@@ -387,6 +421,8 @@ export class PdfView {
     const { wrap } = this.o;
     this.observer?.disconnect();
     this.queue = [];
+    this.cancelRender();
+    for (const slot of this.slots) this.release(slot);
     wrap.replaceChildren();
     this.slots = [];
     const pdf = this.pdf;
@@ -412,6 +448,8 @@ export class PdfView {
         rendered: false,
         token: 0,
         viewport: null,
+        k: 1,
+        textLayerObj: null,
         hlLayer: null,
         textLayer: null,
         strokeCanvas: null,
@@ -421,6 +459,8 @@ export class PdfView {
     wrap.appendChild(frag);
     this.observer = new IntersectionObserver(
       (entries) => {
+        // 縮放的手勢或過場途中不理：內容在做 transform，結束時 `refreshPages` 照真的位置重新判斷一次
+        if (this.gesturing) return;
         for (const e of entries) {
           const slot = this.slots[Number((e.target as HTMLElement).dataset["n"]) - 1];
           if (!slot) continue;
@@ -428,9 +468,70 @@ export class PdfView {
           else this.release(slot);
         }
       },
-      { root: this.o.scroll, rootMargin: "120% 0px" },
+      { root: this.o.scroll, rootMargin: `${PRELOAD * 100}% 0px` },
     );
     for (const slot of this.slots) this.observer.observe(slot.box);
+  }
+
+  /**
+   * 換成新的縮放而不丟掉已經畫好的頁（PDF.js 檢視器的做法：舊畫布用 CSS 撐到新的大小，新的比例畫好再換上）。
+   * 頁框照新的比例改大小；畫好的頁標成 `stale`，裡面幾層暫時放大 `k` 倍。正在畫的那一頁取消。
+   * 要畫哪幾頁由呼叫的一方在捲到新位置之後呼叫 `refreshPages` 決定。
+   */
+  private rescale() {
+    const { wrap } = this.o;
+    if (!this.pdf) return;
+    this.cancelRender();
+    const s = this.scale();
+    const pad = PAD * this.zoom;
+    wrap.style.padding = `${pad}px`;
+    wrap.style.width = `${this.pageW * s + 2 * pad}px`;
+    const w = `${this.pageW * s}px`;
+    const h = `${this.pageH * s}px`;
+    const last = this.slots.length;
+    for (const slot of this.slots) {
+      const box = slot.box;
+      box.style.width = w;
+      box.style.height = h;
+      box.style.marginBottom = `${slot.n === last ? 0 : pad}px`;
+      if (!slot.rendered || !slot.viewport) continue;
+      slot.k = s / slot.viewport.scale;
+      const stale = Math.abs(slot.k - 1) > 1e-4;
+      box.classList.toggle("stale", stale);
+      if (stale) box.style.setProperty("--k", String(slot.k));
+      else {
+        slot.k = 1;
+        box.style.removeProperty("--k");
+      }
+    }
+  }
+
+  /**
+   * 照現在的捲動位置決定要畫哪幾頁：畫面裡與上下 `PRELOAD` 以內的頁，離畫面中間近的先畫（還沒畫的、比例不對的）；
+   * 離得遠的放掉。縮放之後呼叫（手勢途中「看得到哪幾頁」的判斷暫停了）。
+   */
+  private refreshPages() {
+    const sc = this.o.scroll;
+    const margin = sc.clientHeight * PRELOAD;
+    const top = sc.scrollTop - margin;
+    const bottom = sc.scrollTop + sc.clientHeight + margin;
+    const mid = sc.scrollTop + sc.clientHeight / 2;
+    const near: Array<{ slot: PageSlot; d: number }> = [];
+    for (const slot of this.slots) {
+      const y0 = slot.box.offsetTop;
+      const y1 = y0 + slot.box.offsetHeight;
+      if (y1 >= top && y0 <= bottom) near.push({ slot, d: Math.abs((y0 + y1) / 2 - mid) });
+      else this.release(slot);
+    }
+    near.sort((a, b) => a.d - b.d);
+    this.queue = near.filter((x) => !x.slot.rendered || x.slot.k !== 1).map((x) => x.slot.n);
+    void this.drain();
+  }
+
+  private cancelRender() {
+    const t = this.renderTask;
+    this.renderTask = null;
+    t?.task.cancel();
   }
 
   // ---------- 繪製 ----------
@@ -445,10 +546,12 @@ export class PdfView {
     if (this.rendering) return;
     this.rendering = true;
     try {
-      while (this.queue.length > 0 && !this.destroyed) {
+      // 縮放的手勢或過場途中停下（結束時 `refreshPages` 重排隊伍、再叫一次）
+      while (this.queue.length > 0 && !this.destroyed && !this.gesturing) {
         const n = this.queue.shift();
         const slot = n === undefined ? undefined : this.slots[n - 1];
-        if (!slot || slot.rendered) continue;
+        // 畫好而且比例對的不再畫；比例不對的（換了縮放，`k` 不是 1）重畫
+        if (!slot || (slot.rendered && slot.k === 1)) continue;
         try {
           await this.renderPage(slot);
         } catch {
@@ -465,7 +568,8 @@ export class PdfView {
     if (!pdf) return;
     const token = ++slot.token;
     const page = await pdf.getPage(slot.n);
-    const viewport = page.getViewport({ scale: this.scale() });
+    const scale = this.scale();
+    const viewport = page.getViewport({ scale });
     let dpr = Math.min(window.devicePixelRatio || 1, 3); // 螢幕的像素比，上限 3；畫布太大時下面再降
     while (viewport.width * dpr * viewport.height * dpr > MAX_CANVAS_PIXELS && dpr > 0.5) dpr -= 0.25;
     const canvas = document.createElement("canvas");
@@ -473,15 +577,31 @@ export class PdfView {
     canvas.height = Math.floor(viewport.height * dpr);
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
-    await page.render({
+    const task = page.render({
       canvas,
       viewport,
       ...(dpr !== 1 ? { transform: [dpr, 0, 0, dpr, 0, 0] } : {}),
-    }).promise;
-    if (slot.token !== token || !slot.box.isConnected || this.destroyed) {
+    });
+    this.renderTask = { slot, task };
+    try {
+      await task.promise;
+    } catch (e) {
+      // 換了縮放而取消（或畫不出來）：新畫布丟掉，舊的那一份留著撐到下一次畫好
+      canvas.width = 0;
+      canvas.height = 0;
+      page.cleanup();
+      throw e;
+    } finally {
+      if (this.renderTask?.task === task) this.renderTask = null;
+    }
+    // 畫的這段時間裡被放掉、換了縮放、或整個關掉：這一份不用了
+    if (slot.token !== token || !slot.box.isConnected || this.destroyed || Math.abs(this.scale() - scale) > 1e-6) {
+      canvas.width = 0;
+      canvas.height = 0;
       page.cleanup();
       return;
     }
+    const old = slot.box.querySelector<HTMLCanvasElement>(":scope > canvas");
     slot.box.style.width = `${viewport.width}px`;
     slot.box.style.height = `${viewport.height}px`;
     // PDF.js 的文字層用 --scale-factor 換算尺寸，沒有它文字會縮成八分之一、選不到（reader.css 的 .pg 有其餘的變數）
@@ -490,12 +610,22 @@ export class PdfView {
     const hl = document.createElement("div");
     hl.className = "hl-layer";
     hl.style.setProperty("--hl-fill", HIGHLIGHT_COLOR);
-    const tl = document.createElement("div");
-    tl.className = "textLayer";
+    // 文字層已經有了（換縮放重畫）：沿用，只更新比例（PDF.js 文字層的位置用 --scale-factor 換算）
+    const reuse = slot.textLayer && slot.textLayerObj ? { tl: slot.textLayer, obj: slot.textLayerObj } : null;
+    const tl = reuse?.tl ?? document.createElement("div");
+    if (!reuse) tl.className = "textLayer";
     const sc = this.inkLayer.makeCanvas(slot, viewport);
     const ov = document.createElement("div");
     ov.className = "ov-layer";
     slot.box.replaceChildren(canvas, ov, hl, tl, sc);
+    slot.box.classList.remove("stale");
+    slot.box.style.removeProperty("--k");
+    slot.k = 1;
+    // 換下來的舊畫布馬上交還記憶體（不等回收）
+    if (old && old !== canvas) {
+      old.width = 0;
+      old.height = 0;
+    }
     slot.viewport = viewport;
     slot.hlLayer = hl;
     slot.textLayer = tl;
@@ -505,9 +635,20 @@ export class PdfView {
     this.drawOverlay(slot);
     this.drawHighlights(slot);
     this.inkLayer.draw(slot);
+    if (reuse) {
+      try {
+        reuse.obj.update({ viewport });
+      } catch {
+        // 更新不了就維持原樣（只影響選字的精準度）
+      }
+      page.cleanup();
+      return;
+    }
     // 文字層晚一點出來也沒關係：頁面圖先顯示
+    const layer = makeTextLayer(page, tl, viewport, this.covers?.pages[String(slot.n - 1)]);
     try {
-      await makeTextLayer(page, tl, viewport, this.covers?.pages[String(slot.n - 1)]).render();
+      await layer.render();
+      if (slot.token === token && slot.textLayer === tl) slot.textLayerObj = layer;
     } catch {
       // 沒有文字層（掃描版或讀不出來）就只能看，不能選字
     }
@@ -519,12 +660,17 @@ export class PdfView {
   private release(slot: PageSlot) {
     if (!slot.rendered) return;
     slot.token++;
-    const c = slot.box.querySelector("canvas");
-    if (c) {
+    if (this.renderTask?.slot === slot) this.cancelRender();
+    for (const c of slot.box.querySelectorAll("canvas")) {
       c.width = 0;
       c.height = 0;
     }
+    slot.textLayerObj?.cancel();
+    slot.textLayerObj = null;
     slot.box.replaceChildren();
+    slot.box.classList.remove("stale");
+    slot.box.style.removeProperty("--k");
+    slot.k = 1;
     slot.rendered = false;
     this.regions.drop(slot.n);
     slot.viewport = null;
@@ -650,13 +796,14 @@ export class PdfView {
     const vp = slot?.viewport;
     if (!slot || !vp) return null;
     const r = slot.box.getBoundingClientRect();
+    const k = slot.k;
     const [x1, y1] = vp.convertToViewportPoint(bbox[0], bbox[1]) as [number, number];
     const [x2, y2] = vp.convertToViewportPoint(bbox[2], bbox[3]) as [number, number];
     return {
-      left: r.left + Math.min(x1, x2),
-      right: r.left + Math.max(x1, x2),
-      top: r.top + Math.min(y1, y2),
-      bottom: r.top + Math.max(y1, y2),
+      left: r.left + Math.min(x1, x2) * k,
+      right: r.left + Math.max(x1, x2) * k,
+      top: r.top + Math.min(y1, y2) * k,
+      bottom: r.top + Math.max(y1, y2) * k,
     };
   }
 
@@ -671,8 +818,12 @@ export class PdfView {
     const s = this.scale();
     // 方框的上緣與左緣換成從頁面左上角起算的像素（頁面還沒畫好時，用頁面的大小換算）
     const vp = slot.viewport;
-    const [left, top] = vp
+    // 換了縮放、新的比例還沒畫好時，畫好時的位置要再乘上 `k`
+    const vpPoint = vp
       ? (vp.convertToViewportPoint(Math.min(bbox[0], bbox[2]), Math.max(bbox[1], bbox[3])) as [number, number])
+      : null;
+    const [left, top] = vpPoint
+      ? [vpPoint[0] * slot.k, vpPoint[1] * slot.k]
       : [Math.min(bbox[0], bbox[2]) * s, (this.pageH - Math.max(bbox[1], bbox[3])) * s];
     sc.scrollTop = slot.box.offsetTop + top - sc.clientHeight / 4;
     if (sc.scrollWidth - sc.clientWidth > 1) {
@@ -755,6 +906,21 @@ export class PdfView {
         layer.appendChild(el);
       }
     }
+    // 色彩增值只設在真的有劃線的層上：空的層也混合，每一頁都多一個要合成的混合層
+    layer.classList.toggle("has-hl", layer.childElementCount > 0);
+  }
+
+  /** 一條劃線在畫面上占的範圍（點劃線出的小選單對齊它）；那一頁沒畫出來交回 `null`。 */
+  highlightRect(id: string): { left: number; top: number; right: number; bottom: number } | null {
+    const els = this.o.wrap.querySelectorAll<HTMLElement>(`.hl[data-hid="${CSS.escape(id)}"]`);
+    let out: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      out = out
+        ? { left: Math.min(out.left, r.left), top: Math.min(out.top, r.top), right: Math.max(out.right, r.right), bottom: Math.max(out.bottom, r.bottom) }
+        : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    }
+    return out;
   }
 
   /** 讓一條劃線閃一下（從筆記抽屜或連結跳過來時指出是哪一條）。 */
@@ -811,7 +977,8 @@ export class PdfView {
       if (!slot.rendered || !vp) continue;
       const r = slot.box.getBoundingClientRect();
       if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
-      const [x, y] = vp.convertToPdfPoint(clientX - r.left, clientY - r.top);
+      // 換了縮放、新的比例還沒畫好時，頁框比畫好時大 `k` 倍
+      const [x, y] = vp.convertToPdfPoint((clientX - r.left) / slot.k, (clientY - r.top) / slot.k);
       return { n: slot.n, x: x ?? 0, y: y ?? 0 };
     }
     return null;
@@ -880,8 +1047,17 @@ export class PdfView {
     });
 
     this.cleanups.push(
-      attachPinch(sc, this.o.wrap, () => this.zoom, { min: MIN_ZOOM, max: MAX_ZOOM }, (z, focus) =>
-        this.applyZoom(z, focus, null),
+      attachPinch(
+        sc,
+        this.o.wrap,
+        () => this.zoom,
+        { min: MIN_ZOOM, max: MAX_ZOOM },
+        () => {
+          // 手勢途中：不判斷看得到哪幾頁（內容在做 transform），也不在主執行緒上畫頁
+          this.gesturing = true;
+          this.cancelRender();
+        },
+        (z, focus) => this.applyZoom(z, focus, null),
       ),
     );
 
@@ -906,11 +1082,22 @@ export class PdfView {
     zoom: number,
     focus: { z0: number; fx: number; fy: number; px: number; py: number },
     alignLeft: { n: number; x: number } | null,
+    animate = false,
   ) {
     const sc = this.o.scroll;
     const wrap = this.o.wrap;
-    this.zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
-    this.layout();
+    const next = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
+    const before = wrap.getBoundingClientRect();
+    const z0 = this.zoom;
+    // 兩指放上去又拿開、沒有真的縮放：什麼都不必做
+    if (Math.abs(next - z0) < 1e-3 && !alignLeft) {
+      this.gesturing = false;
+      this.refreshPages();
+      return;
+    }
+    this.zoom = next;
+    // 不重建頁面：頁框改大小，畫好的頁先用 CSS 撐著（`rescale`），捲到新位置之後只重畫看得到的
+    this.rescale();
     const r = this.zoom / focus.z0;
     sc.scrollTop = wrap.offsetTop + focus.py * r - focus.fy;
     const slot = alignLeft ? this.slots[alignLeft.n - 1] : undefined;
@@ -922,6 +1109,33 @@ export class PdfView {
     }
     this.reportPage();
     this.o.onMove();
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!animate || reduce || typeof wrap.animate !== "function") {
+      this.gesturing = false;
+      this.refreshPages();
+      return;
+    }
+    // 雙擊的過場（FLIP）：版面已經是新的，先用 transform 把它擺回看起來和之前一樣，再放回原樣。
+    // 只動 transform；過場途中不判斷看得到哪幾頁、不開始畫，結束才重畫（不和過場搶主執行緒）
+    const after = wrap.getBoundingClientRect();
+    const k = z0 / this.zoom;
+    this.gesturing = true;
+    wrap.style.willChange = "transform";
+    const anim = wrap.animate(
+      [
+        { transformOrigin: "0 0", transform: `translate(${before.left - after.left}px, ${before.top - after.top}px) scale(${k})` },
+        { transformOrigin: "0 0", transform: "none" },
+      ],
+      { duration: ZOOM_ANIM_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+    const done = () => {
+      wrap.style.willChange = "";
+      if (this.destroyed) return;
+      this.gesturing = false;
+      this.refreshPages();
+    };
+    anim.onfinish = done;
+    anim.oncancel = done;
   }
 
   /** 雙擊放大之前的縮放（再雙擊回到它）；沒有雙擊放大過是 `null`。 */
@@ -955,6 +1169,8 @@ export class PdfView {
    * 雙欄找中縫、跨欄的區塊與單欄取文字區）；算不出來（沒有文字、頁面轉了方向）時放大到頁寬的兩倍。
    */
   async toggleColumnZoom(clientX: number, clientY: number): Promise<void> {
+    // 上一次的過場還沒結束（版面在做 transform，量到的位置不準）：這一下不算
+    if (this.gesturing) return;
     const sc = this.o.scroll;
     const sr = sc.getBoundingClientRect();
     const wr = this.o.wrap.getBoundingClientRect();
@@ -962,7 +1178,7 @@ export class PdfView {
     const base = this.zoomBefore ?? MIN_ZOOM;
     if (this.zoom > base + 0.05) {
       this.zoomBefore = null;
-      this.applyZoom(base, focus, null);
+      this.applyZoom(base, focus, null, true);
       return;
     }
     const hit = this.pageAt(clientX, clientY);
@@ -979,7 +1195,8 @@ export class PdfView {
     let alignLeft: { n: number; x: number } | null = null;
     if (hit && vp && col) {
       // 欄的左右緣換成從頁面左緣起算的點（PDF 的單位），兩側各留一點邊；新的倍率讓這一段剛好占滿畫面寬
-      const s = this.scale();
+      // 換算用畫好時的比例（新的比例可能還沒畫好）
+      const s = vp.scale;
       const [ax = 0] = vp.convertToViewportPoint(col.x0, hit.y);
       const [bx = 0] = vp.convertToViewportPoint(col.x1, hit.y);
       const left = Math.min(ax, bx) / s;
@@ -992,7 +1209,7 @@ export class PdfView {
       }
     }
     this.zoomBefore = this.zoom;
-    this.applyZoom(target, focus, alignLeft);
+    this.applyZoom(target, focus, alignLeft, true);
   }
 
   destroy() {

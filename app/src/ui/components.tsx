@@ -284,29 +284,192 @@ export function ResultSheet(props: {
   );
 }
 
+/** 提示上的一顆按鈕（例如「復原」）。 */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface ToastData {
   message: string;
   /** 例如「復原」：按下去做 `run`，提示就收掉。 */
-  action?: { label: string; run: () => void };
+  action?: ToastAction;
+  /**
+   * 留著，不自動消失：直到按了動作、往旁邊滑掉，或點了畫面上別的地方（下一個動作）才收。
+   * 「復原」的提示用；不給的照舊：有動作的 8 秒、沒有的 4 秒後消失。
+   */
+  keep?: boolean;
+  /**
+   * 這一則提示「定了」：每一則只呼叫一次。`undone` 為真是使用者按了動作（復原）；為假是其他收掉的方式——
+   * 滑掉、點了別處（下一個動作）、換成另一則提示、進到新的一層、自動消失、應用進入背景或頁面要離開、提示元件卸載。
+   * 給「先不寫、收掉才寫」的做法用（例如延後寫入的刪除）：`undone` 為假時才真的寫。
+   * 先做、按復原再反做的不必給。給了它的提示在應用進入背景時會收掉（寫入已經做了，留著的「復原」不再有效）。
+   */
+  onSettle?: (undone: boolean) => void;
 }
 
-/** 一則短暫的訊息（有動作的 8 秒、沒有的 4 秒後消失）。淡入加上移，淡出。 */
+/**
+ * 做完一個可以反做的動作之後：顯示 `message` 與「復原」，提示留到使用者處理。
+ * 按「復原」就做 `revert`；之後目錄重新讀，失敗時說明原因。`revert` 只用核心的操作，不碰畫面的狀態
+ * （提示會跟著回到上一層，原本的畫面可能已經關了）。
+ */
+export type ShowUndo = (message: string, revert: () => Promise<unknown>) => void;
+
+/** 往旁邊滑多遠算滑掉（px）。 */
+const SWIPE_AWAY = 72;
+/** 手指移動多少之後才算在滑（之前仍當作點按，按鈕照常能按）。 */
+const SWIPE_SLOP = 8;
+
+/**
+ * 一則短暫的訊息。淡入加上移，淡出。
+ * 一般的：有動作的 8 秒、沒有的 4 秒後消失。`keep` 的：留到按了動作、滑掉，或點了別的地方（M3 Snackbar）。
+ */
 export function Toast(props: { toast: ToastData | null; onDone: () => void }) {
   const done = useRef(props.onDone);
   useEffect(() => {
     done.current = props.onDone;
   });
   const toast = props.toast;
+  const [dx, setDx] = useState(0);
+  const drag = useRef<{ x: number; moved: boolean } | null>(null);
+  /** 已經呼叫過 `onSettle` 的那一則（每一則只呼叫一次）。 */
+  const settled = useRef<ToastData | null>(null);
+  const settle = (tst: ToastData, undone: boolean) => {
+    if (settled.current === tst) return;
+    settled.current = tst;
+    tst.onSettle?.(undone);
+  };
+  /** 剛離開、還沒定的那一則：開發模式的 StrictMode 會立刻重掛同一則，那時不算離開。 */
+  const leaving = useRef<ToastData | null>(null);
   useEffect(() => {
+    setDx(0);
+    drag.current = null;
     if (!toast) return;
-    const id = window.setTimeout(() => done.current(), toast.action ? 8000 : 4000);
-    return () => window.clearTimeout(id);
+    if (leaving.current === toast) leaving.current = null;
+    const cleanups: Array<() => void> = [];
+    if (toast.onSettle) {
+      // 應用進入背景、頁面要離開：定下來（延後的寫入這時寫），提示收掉
+      const away = () => {
+        if (document.visibilityState === "visible") return;
+        settle(toast, false);
+        done.current();
+      };
+      const leave = () => {
+        settle(toast, false);
+        done.current();
+      };
+      document.addEventListener("visibilitychange", away);
+      window.addEventListener("pagehide", leave);
+      cleanups.push(() => {
+        document.removeEventListener("visibilitychange", away);
+        window.removeEventListener("pagehide", leave);
+      });
+    }
+    if (toast.keep) {
+      // 點了提示以外的地方（下一個動作）就收。用捕獲階段：點下去的那個按鈕照常會動；
+      // 這一則是在某次點按的處理中出現的，那次點按的捕獲階段已經過了，不會把它自己收掉
+      // 用 `closest` 判斷，不靠 ref：上一則還在播退場時，它卸載會把共用的 ref 清掉
+      const onClick = (e: MouseEvent) => {
+        if (e.target instanceof Element && e.target.closest(".toast")) return;
+        done.current();
+      };
+      window.addEventListener("click", onClick, true);
+      cleanups.push(() => window.removeEventListener("click", onClick, true));
+    } else {
+      const id = window.setTimeout(() => done.current(), toast.action ? 8000 : 4000);
+      cleanups.push(() => window.clearTimeout(id));
+    }
+    return () => {
+      cleanups.forEach((c) => c());
+      // 這一則離開了（收掉、換成別的、元件卸載）：沒按動作就是定了。等一下再定：
+      // 同一則馬上又掛回來（StrictMode 的重掛）就不算
+      leaving.current = toast;
+      queueMicrotask(() => {
+        if (leaving.current !== toast) return;
+        leaving.current = null;
+        settle(toast, false);
+      });
+    };
+    // `settle` 只讀寫 ref，不必列進依賴
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [toast]);
   const motion = useMotion("toast");
+  // 提示占的高度（畫面底到提示頂端）寫進根元素的 `--toast-h`，捲動的清單與下緣的元件用它讓位。
+  // 只在提示出現、大小改變時更新（ResizeObserver），提示收起就還原成 0
+  const box = useRef<{ el: HTMLElement | null; ro: ResizeObserver | null }>({ el: null, ro: null });
+  const publish = () => {
+    const el = box.current.el;
+    const px = el ? parseFloat(getComputedStyle(el).bottom) + el.offsetHeight : 0;
+    document.documentElement.style.setProperty("--toast-h", `${Number.isFinite(px) ? Math.round(px) : 0}px`);
+  };
+  const attach = (el: HTMLElement | null) => {
+    if (!el) return; // 舊的那一則退場時會傳 null；已換成新的就不動，收起由下面的 effect 還原
+    const b = box.current;
+    b.ro?.disconnect();
+    b.el = el;
+    if (typeof ResizeObserver !== "undefined") {
+      b.ro = new ResizeObserver(publish);
+      b.ro.observe(el);
+    }
+    publish();
+  };
+  useEffect(() => {
+    if (toast) return;
+    box.current.ro?.disconnect();
+    box.current.el = null;
+    document.documentElement.style.setProperty("--toast-h", "0px");
+  }, [toast]);
+  useEffect(
+    () => () => {
+      box.current.ro?.disconnect();
+      document.documentElement.style.setProperty("--toast-h", "0px");
+    },
+    [],
+  );
+  // 往旁邊滑掉（只有 `keep` 的；動畫元件只載入基本功能，自己算手指的位移）
+  const swipe = toast?.keep
+    ? {
+        onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+          drag.current = { x: e.clientX, moved: false };
+        },
+        onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+          const d = drag.current;
+          if (!d) return;
+          const moved = e.clientX - d.x;
+          if (!d.moved && Math.abs(moved) < SWIPE_SLOP) return;
+          if (!d.moved) {
+            // 開始滑了才抓住手指：之前抓的話，點「復原」的那一下會落在提示本身而不是按鈕上
+            d.moved = true;
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }
+          setDx(moved);
+        },
+        onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+          const d = drag.current;
+          drag.current = null;
+          if (!d?.moved) return;
+          if (Math.abs(e.clientX - d.x) >= SWIPE_AWAY) done.current();
+          else setDx(0);
+        },
+        onPointerCancel: () => {
+          drag.current = null;
+          setDx(0);
+        },
+      }
+    : {};
   return (
     <AnimatePresence>
       {toast ? (
-        <m.div key={toast.message} className="toast" role="status" aria-live="polite" {...motion}>
+        <m.div
+          key={toast.message}
+          className={toast.keep ? "toast keep" : "toast"}
+          ref={attach}
+          role="status"
+          aria-live="polite"
+          style={toast.keep ? { x: dx } : undefined}
+          {...motion}
+          {...swipe}
+        >
           <span className="toast-text">{toast.message}</span>
           {toast.action ? (
             <button
@@ -314,6 +477,7 @@ export function Toast(props: { toast: ToastData | null; onDone: () => void }) {
               className="toast-action"
               onClick={() => {
                 const run = toast.action?.run;
+                settle(toast, true);
                 done.current();
                 run?.();
               }}

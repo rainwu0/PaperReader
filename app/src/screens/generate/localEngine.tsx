@@ -112,7 +112,7 @@ export function useModelFile<S>(ops: ModelFileOps<S>) {
 type OnDevice = ReturnType<typeof useOnDevice>;
 
 /**
- * 一個模型檔的控制項：狀態那一句、下載（先說明連到哪裡、多大，按「下載」才下載）、進度與停止、刪除（可以先確認）。
+ * 一個模型檔的控制項：狀態那一句、下載（先說明連到哪裡、多大，按「下載」才下載）、進度與停止、刪除。
  * 離線翻譯的語言模型與版面模型共用。
  */
 export function ModelFileControls(props: {
@@ -127,12 +127,10 @@ export function ModelFileControls(props: {
   progress: { done: number; total: number };
   onDownload: () => void;
   onStop: () => void;
-  /** 有東西可以刪時給。 */
+  /** 有東西可以刪時給。刪了不先問：要用時可以再下載，刪掉後的那一句會這樣說。 */
   onDelete?: () => void;
-  /** 刪除前先問（標題與內容）；不給就直接刪。 */
-  deleteAsk?: { title: string; body: string };
 }) {
-  const [asking, setAsking] = useState<"download" | "delete" | null>(null);
+  const [asking, setAsking] = useState<"download" | null>(null);
   const dl = props.progress;
   return (
     <>
@@ -176,29 +174,9 @@ export function ModelFileControls(props: {
         )
       ) : null}
       {props.onDelete && !props.busy ? (
-        asking === "delete" && props.deleteAsk ? (
-          <div className="od-ask" role="group" aria-label={props.deleteAsk.title}>
-            <p className="small">
-              <strong>{props.deleteAsk.title}</strong> {props.deleteAsk.body}
-            </p>
-            <div className="btn-row">
-              <Button
-                primary
-                onClick={() => {
-                  setAsking(null);
-                  props.onDelete?.();
-                }}
-              >
-                {t("ondevice.delete")}
-              </Button>
-              <Button onClick={() => setAsking(null)}>{t("common.cancel")}</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="btn-row">
-            <Button onClick={() => (props.deleteAsk ? setAsking("delete") : props.onDelete?.())}>{t("ondevice.delete")}</Button>
-          </div>
-        )
+        <div className="btn-row">
+          <Button onClick={props.onDelete}>{t("ondevice.delete")}</Button>
+        </div>
       ) : null}
     </>
   );

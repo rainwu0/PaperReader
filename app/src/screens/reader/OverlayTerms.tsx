@@ -17,18 +17,20 @@ export function OverlayTerms(props: {
   onSaved: () => Promise<void> | void;
 }) {
   const shown = props.terms.filter((x) => inUse(x.state));
+  // 刪掉的：收在下面，可以放回
+  const removed = props.terms.filter((x) => x.state === "removed");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const write = async (next: OverlayTerm[]) => {
+  const write = async (next: OverlayTerm[], done = t("reader.check.terms.saved")) => {
     if (busy) return;
     setBusy(true);
     setNote(null);
     try {
       await api.setOverlayTerms(props.paperId, props.overlayId, next);
       setDrafts({});
-      setNote({ ok: true, text: t("reader.check.terms.saved") });
+      setNote({ ok: true, text: done });
       await props.onSaved();
     } catch (e) {
       setNote({ ok: false, text: `${t("reader.check.terms.failed")} ${errorMessage(kindOf(e))}` });
@@ -47,6 +49,12 @@ export function OverlayTerms(props: {
   /** 刪掉：不用，之後也不再學這個詞。 */
   const remove = (source: string) =>
     void write(props.terms.map((x) => (x.source === source ? { ...x, state: "removed", batches: 0 } : x)));
+  /** 放回：照刪掉之前的譯法，當成使用者定的（學到的不再蓋掉它；原本是學到的還是你改的，檔裡沒有記）。 */
+  const restore = (source: string) =>
+    void write(
+      props.terms.map((x) => (x.source === source ? { ...x, state: "user", batches: 0 } : x)),
+      t("reader.check.terms.restored"),
+    );
 
   return (
     <Details label={t("reader.check.terms.title", { n: shown.length })}>
@@ -80,6 +88,21 @@ export function OverlayTerms(props: {
           </div>
         );
       })}
+      {removed.length > 0 ? (
+        <Details label={t("reader.check.terms.removed", { n: removed.length })}>
+          <p className="muted small">{t("reader.check.terms.removedAbout")}</p>
+          {removed.map((x) => (
+            <div key={x.source} className="cmp-seg btn-row">
+              <span>
+                {x.source} → {x.target}
+              </span>
+              <Button disabled={busy} onClick={() => restore(x.source)}>
+                {t("reader.check.terms.restore")}
+              </Button>
+            </div>
+          ))}
+        </Details>
+      ) : null}
       {note ? (
         <p className={note.ok ? "gen-status" : "field-error"} role={note.ok ? "status" : "alert"}>
           {note.text}

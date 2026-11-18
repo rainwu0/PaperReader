@@ -70,8 +70,9 @@ export const digestStrings = {
   "digest.view.noApp": "沒有能打開 Markdown 的應用。",
   "digest.view.failed": "沒有完成。",
   "digest.delete.title": "刪掉這一點？",
-  "digest.delete.body": "會從重點筆記的檔案裡拿掉。",
+  "digest.delete.body": "會從重點筆記拿掉，無法復原。",
   "digest.delete.yes": "刪掉",
+  "digest.view.remove": "移除這份重點筆記",
 
   "digest.section.question": "研究問題",
   "digest.section.method": "方法",

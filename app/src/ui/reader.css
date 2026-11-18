@@ -37,6 +37,22 @@
   display: block;
 }
 
+/* 換了縮放、新的比例還沒畫好的頁（`pdfView.ts` 的 `rescale`）：頁框已經是新的大小，
+   裡面幾層（畫好的頁面、劃線、筆跡）暫時放大 `--k` 倍撐著，畫好就換掉；文字層先藏起來（PDF.js 檢視器同樣的做法），
+   超出頁框的部分剪掉，不讓捲動範圍暫時變大 */
+.pg.stale {
+  overflow: hidden;
+}
+
+.pg.stale > * {
+  transform-origin: 0 0;
+  transform: scale(var(--k, 1));
+}
+
+.pg.stale > .textLayer {
+  visibility: hidden;
+}
+
 .reader-bar {
   position: absolute;
   left: 0;
@@ -124,12 +140,55 @@
   content: " ✓";
 }
 
+/* 檢視切換裡可以移除的那幾份：名稱右邊一顆「移除」 */
+.view-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--divider);
+}
+
+.view-row .outline-item {
+  flex: 1;
+  border-bottom: 0;
+}
+
+.view-remove {
+  flex: none;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* 跳到別處之後的「回到第 n 頁」：頁碼上面，捲遠了就收。筆記窗格開著、工具箱停靠在下緣時，
+   跟著讓到它們上面（`--pane-lift`、`--pane-h`、`--pane-w` 由閱讀畫面設，和頁碼同一套） */
+.back-pill {
+  position: absolute;
+  left: calc((100% - var(--pane-w, 0px)) / 2);
+  bottom: max(calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px) + 52px), calc(var(--toast-h, 0px) + 8px));
+  transform: translateX(-50%);
+  z-index: 5;
+  min-height: var(--tap);
+  padding: 0 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+  background: var(--raised);
+  color: var(--accent);
+  box-shadow: var(--shadow-raised);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 /* ---------- 首次提示：閱讀畫面頂端的小卡，按「知道了」收起 ---------- */
 
-/* 放在下方、蓋在工具箱之上：不擋頂列，也不被浮動的工具箱蓋住 */
+/* 放在下方、蓋在工具箱之上：不擋頂列，也不被浮動的工具箱蓋住；位置在筆刷列（最多兩列）的上面，不蓋住它 */
 .reader-hint {
   top: auto;
-  bottom: calc(var(--inset-bottom) + 76px);
+  bottom: calc(var(--inset-bottom) + 190px);
   z-index: 12;
   display: flex;
   align-items: center;
@@ -211,12 +270,16 @@
    顏色 `--hl-fill` 由 `pdfView.ts` 設在劃線層上（`api/types.ts` 的 HIGHLIGHT_COLOR，和匯出的 PDF 同一個值）；
    深色主題的頁面仍是白紙（或整頁反相），所以不跟著主題換。
    色彩增值（multiply）設在整層上：這一層有 z-index，自成一個疊放層，設在每一條劃線上只會和這一層透明的底混合、
-   碰不到底下的頁面，不透明的黃會把字蓋掉；整層和頁面混合，白紙變成劃線色、黑字仍是黑字（和匯出的 PDF 相同） */
+   碰不到底下的頁面，不透明的黃會把字蓋掉；整層和頁面混合，白紙變成劃線色、黑字仍是黑字（和匯出的 PDF 相同）。
+   只設在有劃線的層上（`has-hl`，`pdfView.ts` 畫劃線時切換）：沒有劃線的頁不多一個混合層 */
 .hl-layer {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
+}
+
+.hl-layer.has-hl {
   mix-blend-mode: multiply;
 }
 
@@ -296,6 +359,18 @@
   font-weight: 600;
 }
 
+/* 點一條劃線出的小選單（刪除、短評）：和選字之後的「劃線」同一個樣子 */
+.hl-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hl-menu.sel-pill svg {
+  width: 20px;
+  height: 20px;
+}
+
 /* ---------- 工具箱 ---------- */
 
 .tb-mini {
@@ -320,7 +395,9 @@
 .tb-btn svg,
 .tb-grip svg,
 .tb-min svg,
-.brush-bar svg {
+.brush-bar svg,
+.hl-menu svg,
+.notes-delete svg {
   width: 24px;
   height: 24px;
   fill: none;
@@ -590,7 +667,8 @@
   position: fixed;
   left: 50%;
   translate: -50% 0; /* 個別的 translate：transform 留給轉換 */
-  bottom: calc(var(--inset-bottom) + 64px);
+  /* 提示（Toast）出現時讓到它上面（--toast-h 由提示設） */
+  bottom: max(calc(var(--inset-bottom) + 64px), calc(var(--toast-h, 0px) + 8px));
   z-index: 6;
   display: flex;
   flex-wrap: wrap; /* 按鈕多了，窄的螢幕排成兩列 */
@@ -606,7 +684,7 @@
 }
 
 .brush-bar.above-dock {
-  bottom: calc(var(--inset-bottom) + 80px);
+  bottom: max(calc(var(--inset-bottom) + 80px), calc(var(--toast-h, 0px) + 8px));
 }
 
 .brush-bar button {
@@ -659,7 +737,7 @@
 }
 
 .reader.pane-open .brush-bar {
-  bottom: calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px) + 12px);
+  bottom: max(calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px) + 12px), calc(var(--toast-h, 0px) + 8px));
   left: calc((100% - var(--pane-w, 0px)) / 2);
 }
 
@@ -893,6 +971,7 @@
   top: 0;
   z-index: 2;
   display: flex;
+  flex-wrap: wrap; /* 格式鈕加上復原、重做，360dp 寬放不下一行時「編輯／預覽」換到下一行 */
   align-items: center;
   gap: 2px;
   padding: 6px 0;
@@ -1022,10 +1101,35 @@
 }
 
 .notes-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   border-bottom: 1px solid var(--divider);
 }
 
+/* 每一條劃線右邊的刪除（可以從提示復原一次） */
+.notes-delete {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  margin-top: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted, var(--text));
+}
+
+.notes-item .notes-delete svg {
+  width: 20px;
+  height: 20px;
+}
+
 .notes-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;

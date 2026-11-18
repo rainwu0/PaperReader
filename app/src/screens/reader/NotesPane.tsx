@@ -13,6 +13,7 @@ import { Button } from "../../ui/components";
 import { AnimatePresence, m as Motion, useMotion } from "../../ui/motion";
 import { MarkdownEditor, type EditorHandle, type FormatCommand } from "./MarkdownEditor";
 import { renderMarkdown } from "./markdown";
+import { TrashIcon } from "./toolIcons";
 import { appendPart, unsavedPart } from "./notesConflict";
 import type { NotesState } from "./useNotes";
 
@@ -45,6 +46,10 @@ export function NotesPane(props: {
   onSplit: (fraction: number) => void;
   onClose: () => void;
   onJump: (h: Highlight) => void;
+  /** 刪一條劃線（可以從提示復原一次）。 */
+  onDelete: (id: string) => void;
+  /** 剛刪、還能復原的：先不列。 */
+  hiddenIds: readonly string[];
   onMessage: (m: string) => void;
   onOpenExternal: (obsidian: boolean) => void;
 }) {
@@ -226,7 +231,7 @@ export function NotesPane(props: {
     drag.current = null;
   };
 
-  const highlights = doc?.highlights ?? [];
+  const highlights = (doc?.highlights ?? []).filter((h) => !props.hiddenIds.includes(h.id));
   const stateText =
     state === "saving"
       ? t("reader.notes.saving")
@@ -380,6 +385,20 @@ export function NotesPane(props: {
                   {f.face}
                 </button>
               ))}
+              {/* 復原與重做：接編輯器自己的歷史，手機上沒有 Ctrl+Z */}
+              {(["undo", "redo"] as const).map((cmd) => (
+                <button
+                  key={cmd}
+                  type="button"
+                  className={`np-fmt fmt-${cmd}`}
+                  aria-label={t(`reader.notes.fmt.${cmd}`)}
+                  disabled={mode === "preview"}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => editor.current?.history(cmd)}
+                >
+                  {cmd === "undo" ? "↶" : "↷"}
+                </button>
+              ))}
               <span className="np-spacer" />
               <div className="np-mode" role="group" aria-label={t("reader.notes.mode")}>
                 <button type="button" aria-pressed={mode === "edit"} onClick={() => switchMode("edit")}>
@@ -460,6 +479,16 @@ export function NotesPane(props: {
                       <p className="muted small">{t("reader.notes.incomplete")}</p>
                     )}
                   </div>
+                  {h.complete ? (
+                    <button
+                      type="button"
+                      className="notes-delete"
+                      aria-label={t("reader.notes.delete", { page: pageText(h) })}
+                      onClick={() => props.onDelete(h.id)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>

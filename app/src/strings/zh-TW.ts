@@ -146,8 +146,6 @@ const base = {
   "info.markRead": "標示為已讀",
   "info.markReadHint": "已讀由你自己標示；打開過、還沒標示的是「讀到一半」。",
   "info.remove": "移除這篇文獻",
-  "info.remove.confirmTitle": "移除這篇文獻？",
-  "info.remove.confirmBody": "會移到回收區，可以還原。",
   "info.removed": "已移到回收區",
   "info.saved": "已儲存",
   "info.conflict.reload": "重新載入",
@@ -164,8 +162,6 @@ const base = {
   "info.material.other": "其他材料",
   "info.material.pages": "{n} 頁",
   "info.material.made": "{when} {time}",
-  "info.material.removeTitle": "移除「{name}」？",
-  "info.material.removeBody": "檔案移到回收區，可以還原。",
 
   // 回收區
   "trash.title": "回收區",
@@ -188,6 +184,30 @@ const base = {
   "trash.emptyAll.title": "清空回收區？",
   "trash.emptyAll.body": "回收區裡的 {n} 項會刪掉，無法復原。筆記檔留著。",
   "trash.emptied": "回收區已清空",
+
+  // 移除與復原：可以反做的直接做，提示給「復原」；做不了反做的才確認
+  "undo.failed.title": "沒有復原",
+  "paper.remove": "移除",
+  "select.more": "更多動作",
+  "paper.remove.failed.title": "沒有移除",
+  "bulk.removed": "已移除 {n} 篇",
+  "bulk.remove.partial": "已移除 {ok} 篇，{fail} 篇沒有移除",
+  "group.leave": "移出群組",
+  "group.left": "已移出「{name}」",
+  "group.deleted": "已刪除群組「{name}」",
+  "bulk.leave.hint": "把選的 {n} 篇移出哪個群組？",
+  "bulk.leave.none": "選的文獻都不在群組裡。",
+  "bulk.leave.failed.title": "沒有移出群組",
+  "bulk.leave.partial": "已移出 {ok} 篇，{fail} 篇沒能移出",
+  "read.marked": "已標示為已讀",
+  "read.failed.title": "沒有標示為已讀",
+  "bulk.read.done": "已把 {n} 篇標示為已讀",
+  "bulk.read.partial": "已標示 {ok} 篇，{fail} 篇沒有標示",
+  "add.batch.removeAdded": "移除這次加入的 {n} 篇",
+  "prompts.deletedOne": "已刪除「{name}」",
+  "glossary.deletedOne": "已刪除一條",
+  "key.clear.title": "清除金鑰？",
+  "key.clear.body": "清除後要重新貼上才能翻譯。",
 
   // 設定
   "settings.title": "設定",

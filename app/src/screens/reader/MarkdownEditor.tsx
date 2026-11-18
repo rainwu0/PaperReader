@@ -1,10 +1,10 @@
 // 筆記的 Markdown 編輯器（CodeMirror 6，MIT）：只負責編輯文字與格式按鈕的動作；
 // 儲存、預覽、窗格的大小都在 `NotesPane`。
 
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorSelection, EditorState, type ChangeSpec } from "@codemirror/state";
+import { EditorSelection, EditorState, Transaction, type ChangeSpec } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { useEffect, useImperativeHandle, useRef } from "react";
 
@@ -12,6 +12,8 @@ export type FormatCommand = "heading" | "bold" | "italic" | "list" | "quote" | "
 
 export interface EditorHandle {
   format: (cmd: FormatCommand) => void;
+  /** 復原、重做（編輯器自己的歷史；外部換掉的整份文字不算在歷史裡）。 */
+  history: (cmd: "undo" | "redo") => void;
   getText: () => string;
   /** 換掉整份文字（外部程式改了檔案、這邊沒有未存的修改時用）。 */
   setText: (text: string) => void;
@@ -164,11 +166,19 @@ export function MarkdownEditor(props: {
       else if (cmd === "quote") toggleLinePrefix(v, "> ");
       else insertLink(v);
     },
+    history: (cmd) => {
+      const v = view.current;
+      if (!v) return;
+      v.focus();
+      if (cmd === "undo") undo(v);
+      else redo(v);
+    },
     getText: () => view.current?.state.doc.toString() ?? "",
     setText: (text) => {
       const v = view.current;
       if (!v) return;
-      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } });
+      // 外部程式改了檔案、換成新內容：不進復原的歷史（復原不會把別處改的內容退回去）
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations: Transaction.addToHistory.of(false) });
     },
     focus: () => view.current?.focus(),
   }));
