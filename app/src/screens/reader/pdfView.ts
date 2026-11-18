@@ -11,19 +11,7 @@
 import type * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import { HIGHLIGHT_COLOR, type Rect } from "../../api/types";
 import { columnAt, layoutPages, type ColumnSpan, type PageInput } from "../../translate/layout";
-import { t as say } from "../../strings";
-import {
-  cardMaxWidth,
-  markerRoom,
-  placeCards,
-  placeMarkers,
-  quoteHead,
-  sideOf,
-  type CardInput,
-  type CardOptions,
-  type CommentAnchor,
-  type Side,
-} from "./commentLayout";
+import { markerRoom, placeMarkers, type CommentAnchor } from "./commentLayout";
 import { coversFromInfo, filterChunk, type ChunkLike, type Covers, type TextItemLike } from "../../translate/textFilter";
 import { InkLayer, type BrushStyle, type InkStroke, type NewStroke } from "./pdfInk";
 import { attachPinch } from "./pdfPinch";
@@ -54,12 +42,13 @@ const PRELOAD = 0.6;
 const ZOOM_ANIM_MS = 220;
 /** 雙擊放大算不出欄時的縮放：頁寬的兩倍（縮放 1 倍是頁寬剛好填滿畫面）。 */
 const FALLBACK_ZOOM = 2;
-/** 短評顯示層：頁緣標記的邊長與離頁緣多遠、卡片的最寬最窄與間距（CSS 像素，不隨縮放變）。 */
-const MARK_SIZE = 22;
+/** 短評標記的邊長範圍與離頁緣多遠（畫好時的畫面像素；邊長照行高，約一個字高的六成）。 */
+const MARK_SIZE = { min: 4, max: 9 };
 const MARK_INSET = 3;
-/** 標記和那一欄文字之間的間距。 */
-const MARK_GAP = 3;
-const CARD: CardOptions = { width: 300, minWidth: 140, inset: 6, gap: 6 };
+/** 標記和行尾文字之間的間距。 */
+const MARK_GAP = 1;
+/** 放大到欄寬時，欄外留給標記的寬度（標記邊長加兩側間距）。 */
+const MARK_ROOM = MARK_SIZE.max + 2 * MARK_GAP;
 
 /** 大綱的一項（攤平後）：標題、第幾層（0 是最上層）、指向的位置（PDF.js 的目標，解成頁碼要再問一次）。 */
 export interface OutlineEntry {
@@ -123,7 +112,7 @@ interface PageSlot {
   strokeCanvas: HTMLCanvasElement | null;
   /** 譯文疊加：把譯文畫在原段落的位置上。 */
   ovLayer: HTMLDivElement | null;
-  /** 短評顯示層：頁緣的標記與展開的卡片（在最上面，接得到點按）。 */
+  /** 短評顯示層：第一行行尾的標記（在最上面，接得到點按）。 */
   cmLayer: HTMLDivElement | null;
 }
 
@@ -142,15 +131,14 @@ export interface DrawnHighlight {
   rects: Rect[];
   /** 有短評的劃線畫得稍微不同。 */
   hasComment: boolean;
-  /** 短評與引句（短評顯示層的卡片用）。 */
+  /** 短評與引句（短評標記用）。 */
   comment?: string;
   quote?: string;
 }
 
-/** 短評顯示層開著沒有、全部展開沒有（`setCommentDisplay`）。 */
+/** 短評標記開著沒有（`setCommentDisplay`）。 */
 export interface CommentDisplay {
   show: boolean;
-  openAll: boolean;
 }
 
 export interface PdfViewOptions {
@@ -166,9 +154,6 @@ export interface PdfViewOptions {
   onStroke?: (stroke: NewStroke) => Promise<void> | void;
   /** 開啟之後，原文有一段讀不出來（那幾頁會是空白）。 */
   onReadError?: (e: unknown) => void;
-  /** 短評卡片上的「編輯」「刪除」（`id` 是劃線的代號）。 */
-  onCommentEdit?: (id: string) => void;
-  onCommentDelete?: (id: string) => void;
 }
 
 export class PdfView {
@@ -940,6 +925,7 @@ export class PdfView {
         const el = document.createElement("div");
         el.className = h.hasComment ? "hl has-comment" : "hl";
         el.dataset["hid"] = h.id;
+        if (h.id === this.focusId) el.classList.add("focus");
         el.style.left = `${Math.min(x1, x2)}px`;
         el.style.top = `${Math.min(y1, y2)}px`;
         el.style.width = `${Math.abs(x2 - x1)}px`;
@@ -978,47 +964,54 @@ export class PdfView {
     }
   }
 
-  // ---------- 短評顯示層：頁緣的標記、點了展開的卡片 ----------
-  // 標記與卡片放在每一頁自己的一層（`cmLayer`）裡，和劃線一樣跟著頁面捲動與縮放，捲動時不必重算。
-  // 只在這一頁畫好（`renderPage`）、換了劃線（`setHighlights`）、開關或展開收起時排一次；縮放的手勢途中不畫頁，
-  // 所以也不重排。排法在 `commentLayout.ts`。
+  // ---------- 短評顯示層：有短評的劃線，第一行行尾的標記 ----------
+  // 標記放在每一頁自己的一層（`cmLayer`）裡，和劃線一樣跟著頁面捲動與縮放，捲動時不必重算。
+  // 只在這一頁畫好（`renderPage`）、換了劃線（`setHighlights`）、開關時排一次；縮放的手勢途中不畫頁，所以也不重排。
+  // 短評的內容在畫面層的短評窗格（`CommentPane.tsx`），不在頁面裡；排法在 `commentLayout.ts`。
 
   private commentShow = false;
-  private commentAll = false;
-  /** 一張一張點開的（沒有全部展開時）、全部展開之後又收起的。 */
-  private commentOpen = new Set<string>();
-  private commentClosed = new Set<string>();
+  /** 短評窗格開著的那一條劃線：加強調框。 */
+  private focusId: string | null = null;
 
-  /** 開關短評顯示層、全部展開或收起。全部展開或收起時，一張一張點的記錄清掉。 */
+  /** 開關短評標記。 */
   setCommentDisplay(d: CommentDisplay) {
-    if (d.openAll !== this.commentAll) {
-      this.commentOpen.clear();
-      this.commentClosed.clear();
-    }
-    if (d.show === this.commentShow && d.openAll === this.commentAll) return;
+    if (d.show === this.commentShow) return;
     this.commentShow = d.show;
-    this.commentAll = d.openAll;
     for (const slot of this.slots) if (slot.rendered) this.drawComments(slot);
   }
 
-  /** 收起所有展開的卡片（「全部收起」；全部展開的狀態另由 `setCommentDisplay` 關掉）。 */
-  collapseComments() {
-    this.commentOpen.clear();
-    this.commentClosed.clear();
-    for (const slot of this.slots) if (slot.rendered) this.drawComments(slot);
+  /** 一條劃線加強調框（短評窗格開著時指出是哪一條）；`null` 拿掉。 */
+  setFocus(id: string | null) {
+    if (id === this.focusId) return;
+    this.focusId = id;
+    for (const el of this.o.wrap.querySelectorAll<HTMLElement>(".hl.focus")) el.classList.remove("focus");
+    if (id === null) return;
+    for (const el of this.o.wrap.querySelectorAll<HTMLElement>(`.hl[data-hid="${CSS.escape(id)}"]`)) el.classList.add("focus");
   }
 
-  private commentIsOpen(id: string): boolean {
-    return this.commentAll ? !this.commentClosed.has(id) : this.commentOpen.has(id);
-  }
-
-  private toggleComment(id: string, n: number) {
-    const open = this.commentIsOpen(id);
-    const set = this.commentAll ? this.commentClosed : this.commentOpen;
-    if (open === this.commentAll) set.add(id);
-    else set.delete(id);
-    const slot = this.slots[n - 1];
-    if (slot?.rendered) this.drawComments(slot);
+  /**
+   * 把一條劃線捲到畫面上、整條在 `limit`（畫面座標的 y，窗格的上緣）以上：已經整條看得到就不動；
+   * 看不到（含那一頁還沒畫出來）就捲到可見範圍的中間。那一頁離得遠時先跳過去，等畫好再排一次（最多約 3 秒）。
+   */
+  revealAbove(id: string, page: number, limit: number, tries = 15) {
+    if (this.destroyed) return;
+    const rect = this.highlightRect(id);
+    if (!rect) {
+      if (tries === 15) this.goToPage(page);
+      if (tries > 0) window.setTimeout(() => this.revealAbove(id, page, limit, tries - 1), 200);
+      return;
+    }
+    const sc = this.o.scroll;
+    const view = sc.getBoundingClientRect();
+    const margin = 12;
+    const top = view.top + margin;
+    const bottom = Math.min(limit, view.bottom) - margin;
+    if (rect.top >= top && rect.bottom <= bottom) return;
+    const room = bottom - top;
+    const height = rect.bottom - rect.top;
+    // 放得下：置中；比可見範圍高：第一行對齊上緣
+    const want = height <= room ? top + (room - height) / 2 : top;
+    sc.scrollBy({ top: rect.top - want, behavior: "auto" });
   }
 
   private drawComments(slot: PageSlot) {
@@ -1040,107 +1033,29 @@ export class PdfView {
       slot.box.appendChild(layer);
       slot.cmLayer = layer;
     } else if (layer.childElementCount > 0) layer.replaceChildren();
-    const pageW = vp.width;
-    const pageH = vp.height;
-    // 欄的範圍要這一頁的文字（和雙擊放大同一份，讀過就留著）：還沒讀過先貼頁緣，讀好再排一次
-    const text = this.pageText.get(slot.n);
-    if (!text) {
-      const token = slot.token;
-      void this.pageInput(slot.n)
-        .then((input) => {
-          if (input && !this.destroyed && slot.token === token && slot.rendered) this.drawComments(slot);
-        })
-        .catch(() => {});
-    }
     const anchors: CommentAnchor[] = list.map((h) => {
-      let first: { top: number; bottom: number; rect: Rect } | null = null;
-      let left = Infinity;
-      let right = -Infinity;
-      for (const r of h.rects) {
+      // 第一行：上緣最高的那一個方框；同一行的其他方框一起算行尾
+      const boxes = h.rects.map((r) => {
         const [x1, y1] = vp.convertToViewportPoint(r[0], r[1]) as [number, number];
         const [x2, y2] = vp.convertToViewportPoint(r[2], r[3]) as [number, number];
-        const top = Math.min(y1, y2);
-        const bottom = Math.max(y1, y2);
-        left = Math.min(left, x1, x2);
-        right = Math.max(right, x1, x2);
-        if (!first || top < first.top) first = { top, bottom, rect: r };
-      }
-      const a: CommentAnchor = { id: h.id, lineTop: first?.top ?? 0, lineBottom: first?.bottom ?? 0, left, right };
-      const r = first?.rect;
-      const col = text && r && vp.rotation % 360 === 0 ? this.columnOf(slot.n, text, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2) : null;
-      if (col && r) {
-        const cy = (r[1] + r[3]) / 2;
-        const [ax = 0] = vp.convertToViewportPoint(col.x0, cy);
-        const [bx = 0] = vp.convertToViewportPoint(col.x1, cy);
-        a.colLeft = Math.min(ax, bx);
-        a.colRight = Math.max(ax, bx);
-      }
-      return a;
+        return { top: Math.min(y1, y2), bottom: Math.max(y1, y2), right: Math.max(x1, x2) };
+      });
+      const first = boxes.reduce((a, b) => (b.top < a.top ? b : a));
+      const half = (first.bottom - first.top) / 2;
+      const lineRight = Math.max(...boxes.filter((b) => Math.abs(b.top - first.top) < half).map((b) => b.right));
+      return { id: h.id, lineTop: first.top, lineBottom: first.bottom, lineRight };
     });
-    const byId = new Map(list.map((h) => [h.id, h]));
-    const anchorOf = new Map(anchors.map((a) => [a.id, a]));
     const frag = document.createDocumentFragment();
-    const marks = placeMarkers(anchors, pageW, MARK_SIZE, MARK_INSET, MARK_GAP);
-    const markOf = new Map(marks.map((m) => [m.id, m]));
-    for (const m of marks) {
-      const h = byId.get(m.id);
-      const el = document.createElement("button");
-      el.type = "button";
+    for (const m of placeMarkers(anchors, vp.width, MARK_SIZE, MARK_INSET, MARK_GAP)) {
+      const el = document.createElement("div");
       el.className = "cm-mark";
+      el.setAttribute("aria-hidden", "true");
       el.style.left = `${m.x}px`;
       el.style.top = `${m.y}px`;
-      el.setAttribute("aria-label", say("reader.comments.mark", { quote: quoteHead(h?.quote ?? "", 16) }));
-      el.setAttribute("aria-expanded", String(this.commentIsOpen(m.id)));
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.toggleComment(m.id, slot.n);
-      });
+      el.style.setProperty("--s", `${m.size}px`);
       frag.appendChild(el);
-    }
-    // 展開的卡片：寬度照內容（最窄 `CARD.minWidth`，最寬到 `cardMaxWidth`，長的換行）。先全部放進去，一次量出寬高
-    // （一頁一次版面計算，量的時候還沒有位置：寬度寫明照內容，和放在哪裡無關），再排位置
-    // 卡片緊靠在標記旁邊（不蓋住標記，點標記才收得起來）：放大讀一欄時頁緣在畫面外，卡片跟著標記靠在那一欄旁邊
-    const screenW = this.o.scroll.clientWidth;
-    const cards: Array<{ id: string; el: HTMLElement; side: Side; top: number; edge?: number }> = [];
-    for (const h of list) {
-      if (!this.commentIsOpen(h.id)) continue;
-      const a = anchorOf.get(h.id);
-      const m = markOf.get(h.id);
-      const side = a ? sideOf(a, pageW) : ("right" as const);
-      const edge = m ? (side === "left" ? m.x + MARK_SIZE + MARK_GAP : m.x - MARK_GAP) : undefined;
-      const el = this.commentCard(h);
-      const max = cardMaxWidth(edge === undefined ? { side } : { side, edge }, pageW, screenW, CARD);
-      el.style.minWidth = `${Math.min(CARD.minWidth, max)}px`;
-      el.style.maxWidth = `${max}px`;
-      frag.appendChild(el);
-      cards.push({ id: h.id, el, side, top: (a?.lineBottom ?? 0) + 4, ...(edge === undefined ? {} : { edge }) });
     }
     layer.appendChild(frag);
-    if (cards.length === 0) return;
-    const inputs: CardInput[] = cards.map((c) => ({
-      id: c.id,
-      side: c.side,
-      top: c.top,
-      width: c.el.offsetWidth,
-      height: c.el.offsetHeight,
-      ...(c.edge === undefined ? {} : { edge: c.edge }),
-    }));
-    const spots = new Map(placeCards(inputs, pageW, pageH, CARD).map((s) => [s.id, s]));
-    for (const c of cards) {
-      const s = spots.get(c.id);
-      if (!s) continue;
-      // 寬度不寫回（offsetWidth 是取整的，寫回可能比原本窄一點而多換一行）：寬度照內容，和位置無關，高度就是量到的那個
-      c.el.style.left = `${s.left}px`;
-      c.el.style.top = `${s.top}px`;
-    }
-  }
-
-  /** 每一頁、每個位置所在的欄（`columnAt` 每次都把整頁的行重排一次；同一條劃線每次排卡片都要問，記下來）。 */
-  private columns = new Map<string, ColumnSpan | null>();
-  private columnOf(n: number, text: PageInput, x: number, y: number): ColumnSpan | null {
-    const key = `${n}:${Math.round(x)}:${Math.round(y)}`;
-    if (!this.columns.has(key)) this.columns.set(key, columnAt(text, x, y));
-    return this.columns.get(key) ?? null;
   }
 
   /** 這一頁有沒有顯示著的短評標記（雙擊放大時要不要在欄外留標記的位置）。 */
@@ -1148,41 +1063,7 @@ export class PdfView {
     return this.commentShow && (this.highlights.get(n) ?? []).some((h) => (h.comment ?? "").trim() !== "");
   }
 
-  /** 一張評語卡片：引句的開頭幾個字、短評全文、「編輯」「刪除」。 */
-  private commentCard(h: DrawnHighlight): HTMLElement {
-    const card = document.createElement("div");
-    card.className = "cm-card";
-    card.dataset["cid"] = h.id;
-    card.setAttribute("role", "note");
-    // 點在卡片上不算點頁面（不收頂列、不開小框）
-    card.addEventListener("click", (e) => e.stopPropagation());
-    const quote = document.createElement("p");
-    quote.className = "cm-quote";
-    quote.textContent = `「${quoteHead(h.quote ?? "")}」`;
-    const text = document.createElement("p");
-    text.className = "cm-text";
-    text.textContent = h.comment ?? "";
-    const actions = document.createElement("div");
-    actions.className = "cm-actions";
-    const button = (label: string, run: () => void) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = label;
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        run();
-      });
-      return b;
-    };
-    actions.append(
-      button(say("reader.comments.edit"), () => this.o.onCommentEdit?.(h.id)),
-      button(say("reader.comments.delete"), () => this.o.onCommentDelete?.(h.id)),
-    );
-    card.append(quote, text, actions);
-    return card;
-  }
-
-  // ---------- 整段寫短評：一段的範圍換成一次選取 ----------
+  // ---------- 整段短評：一段的範圍換成一次選取 ----------
 
   /**
    * 畫面上一點所在的那一段：有譯文疊加檔的段落（版面相同時）就用它，沒有就用這一頁的版面分析（`layout.ts`，
@@ -1508,7 +1389,7 @@ export class PdfView {
       const left = Math.min(ax, bx) / s;
       const width = Math.abs(bx - ax) / s;
       // 這一頁有短評標記時，欄外多留標記的位置（標記貼著欄的外側，放大後才看得到）
-      const marks = this.hasCommentMarks(hit.n) ? markerRoom(MARK_SIZE + 2 * MARK_GAP, width, this.contentWidth()) : 0;
+      const marks = this.hasCommentMarks(hit.n) ? markerRoom(MARK_ROOM, width, this.contentWidth()) : 0;
       const margin = Math.max(4, 0.02 * width, marks);
       const z = this.contentWidth() / (width + 2 * margin) / this.fit();
       if (z > this.zoom * 1.1) {

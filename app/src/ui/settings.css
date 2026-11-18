@@ -223,3 +223,25 @@
     transition: none;
   }
 }
+
+/* 更新頁：這台手機才有的提醒，和這一版的說明分開（上方一條線、帶標題的底色區塊） */
+.update-device-note {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--divider);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.update-device-note-title {
+  margin: 0 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.update-device-note p {
+  margin: 0;
+}

@@ -153,14 +153,13 @@ export function ViewsSheet(props: {
 }
 
 /**
- * 短評的顯示：工具箱「短評」旁的小箭頭打開。顯示短評（開關，記住上次的選擇）、全部展開、全部收起。
+ * 短評的顯示：工具箱「短評」旁的小箭頭打開。顯示短評（開關，記住上次的選擇）、短評一覽（筆記窗格裡只列有短評的劃線）。
  */
 export function CommentsSheet(props: {
   open: boolean;
   show: boolean;
   onShow: (on: boolean) => void;
-  onExpandAll: () => void;
-  onCollapseAll: () => void;
+  onOverview: () => void;
   onDismiss: () => void;
 }) {
   return (
@@ -170,14 +169,10 @@ export function CommentsSheet(props: {
       </CheckRow>
       <ul className="outline-list">
         <li>
-          <button type="button" className="outline-item" onClick={props.onExpandAll}>
-            {t("reader.comments.expandAll")}
+          <button type="button" className="outline-item" onClick={props.onOverview}>
+            {t("reader.comments.overview")}
           </button>
-        </li>
-        <li>
-          <button type="button" className="outline-item" disabled={!props.show} onClick={props.onCollapseAll}>
-            {t("reader.comments.collapseAll")}
-          </button>
+          <p className="muted small">{t("reader.comments.overview.hint")}</p>
         </li>
       </ul>
     </Sheet>

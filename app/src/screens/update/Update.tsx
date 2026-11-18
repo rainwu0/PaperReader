@@ -282,9 +282,10 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
                   <p className="license-text">{a.notes || t("update.notes.empty")}</p>
                   <p className="muted small">{t("update.closes")}</p>
                   {s.miuiOptimized ? (
-                    <p className="muted small" data-testid="update-miui">
-                      {t("update.miui")}
-                    </p>
+                    <aside className="update-device-note" role="note" data-testid="update-miui">
+                      <h3 className="update-device-note-title">{t("update.deviceNote.title")}</h3>
+                      <p>{t("update.miui")}</p>
+                    </aside>
                   ) : null}
                   {phase === "downloading" ? (
                     <div role="status" data-testid="update-progress">

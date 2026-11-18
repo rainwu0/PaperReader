@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { api, AppError, kindOf, type Highlight, type PaperDetail, type ToolboxDock, type ToolboxMode } from "../../api";
 import { isGeneratedPdf, lastDigest, sourcePdf } from "../../api/types";
 import { displayTitle } from "../../format";
@@ -13,6 +13,7 @@ import { hintPending, markHintSeen, type HintId } from "../../hints";
 import { BackIcon, InfoIcon, ShareIcon } from "../../ui/icons";
 import { ExportSheet } from "../export/exportUi";
 import { AnimatePresence, fadeInElement, m as Motion, useMotion } from "../../ui/motion";
+import { CommentPane } from "./CommentPane";
 import { NotesPane } from "./NotesPane";
 import { PdfView, type OutlineEntry, type SwitchPosition, type ViewPosition } from "./pdfView";
 import { CompareView } from "./CompareView";
@@ -65,14 +66,17 @@ const READ_ERROR_AGAIN_MS = 10_000; // 讀不出來的提示收掉之後，又�
 const PEEK_H = 56; // 筆記窗格縮成一條時的高度
 const LONG_PRESS_MS = 500; // 按住劃線這麼久開小選單
 const LONG_PRESS_SLOP = 10; // 像素：手指移動超過這麼多就是在捲動，不算長按
-// 這台裝置上記住的選擇：短評顯示層開著沒有、全部展開沒有
+// 這台裝置上記住的選擇：短評標記開著沒有（沒記過就是開）
 const COMMENTS_KEY = "pr-comments-show";
-const COMMENTS_ALL_KEY = "pr-comments-open-all";
 
 type LoadState =
   | { phase: "loading" }
   | { phase: "ready"; total: number }
   | { phase: "failed"; message: string; detail?: string };
+
+/** 一條劃線第一行的上緣（PDF 頁面座標，越大越靠上）、左緣：同一頁裡排先後。 */
+const topOf = (h: Highlight): number => Math.max(...h.rects.map((r) => Math.max(r[1], r[3])), 0);
+const leftOf = (h: Highlight): number => Math.min(...h.rects.map((r) => Math.min(r[0], r[2])), Infinity);
 
 export function Reader(props: {
   paperId: string;
@@ -114,8 +118,6 @@ export function Reader(props: {
   );
   // 捲動或縮放了（PDF 上點一段的小框要收起）
   const onMovedRef = useRef(() => {});
-  // 短評卡片上的「編輯」「刪除」（`PdfView` 建立時拿的是這個，裡面換成最新的）
-  const commentActs = useRef({ edit: (_id: string) => {}, remove: (_id: string) => {} });
 
   const [detail, setDetail] = useState<PaperDetail | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
@@ -329,8 +331,6 @@ export function Reader(props: {
         return material ? inkRef.current.add(material, st) : undefined;
       },
       onErase: (id) => void inkRef.current.erase(id),
-      onCommentEdit: (id) => commentActs.current.edit(id),
-      onCommentDelete: (id) => commentActs.current.remove(id),
       // 開啟之後有一段讀不出來：說一聲，「再試一次」重新開這一份（停在同一處）。之後捲到別的頁也讀不出來時，
       // 隔一陣子再說一次（提示幾秒後會收掉，空白的頁不能沒有說明）
       onReadError: () => {
@@ -532,27 +532,77 @@ export function Reader(props: {
     setToast,
   });
   const { selection, highlightMode } = hl;
-  useEffect(() => {
-    commentActs.current = { edit: hl.editComment, remove: hl.removeHighlight };
-  });
-
-  // ---------- 短評顯示層：開關與全部展開記在這台裝置上 ----------
+  // ---------- 短評標記與短評窗格 ----------
   const [commentsShown, setCommentsShown] = useLocalPref(COMMENTS_KEY, true, isBool);
-  const [commentsAll, setCommentsAll] = useLocalPref(COMMENTS_ALL_KEY, false, isBool);
   // 筆刷開著（標記會擋住畫筆）、原頁疊譯文開著（劃線是蓋住的）時不顯示
   const commentsVisible = commentsShown && !brushOn && !overlayActive;
   useEffect(() => {
-    viewRef.current?.setCommentDisplay({ show: commentsVisible, openAll: commentsAll });
-  }, [commentsVisible, commentsAll, ready, materialId]);
-  const expandAllComments = () => {
-    setCommentsShown(true);
-    setCommentsAll(true);
-    void nav.back();
+    viewRef.current?.setCommentDisplay({ show: commentsVisible });
+  }, [commentsVisible, ready, materialId]);
+
+  // 這份材料上有短評的劃線，照頁序、同頁由上到下、由左到右（窗格的「上一則」「下一則」）
+  const commented = useMemo(
+    () =>
+      (notes.view?.doc.highlights ?? [])
+        .filter((h) => h.material === materialId && h.complete && h.comment.trim() !== "" && !hl.pending.includes(h.id))
+        .sort((a, b) => a.page.index - b.page.index || topOf(b) - topOf(a) || leftOf(a) - leftOf(b)),
+    [notes.view, materialId, hl.pending],
+  );
+  const [cpId, setCpId] = useState<string | null>(null);
+  const cpLayer = props.sheets.includes("commentPane");
+  const cpIndex = cpId === null ? -1 : commented.findIndex((h) => h.id === cpId);
+  const cpHighlight = cpIndex >= 0 ? (commented[cpIndex] ?? null) : null;
+  const cpOpen = cpLayer && cpHighlight !== null && commentsVisible;
+  // 返回鍵退掉那一層：窗格收起
+  const cpWasLayer = useRef(false);
+  useEffect(() => {
+    if (!cpLayer && cpWasLayer.current) setCpId(null);
+    cpWasLayer.current = cpLayer;
+  }, [cpLayer]);
+  // 那一條不見了（刪了、短評清空、換了材料）或標記關了：窗格收起
+  useEffect(() => {
+    if (cpLayer && cpId !== null && !cpOpen) void nav.back();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [cpLayer, cpId, cpOpen]);
+
+  // 筆記窗格開著（拉高了）時，點有短評的劃線不開短評窗格：筆記窗格的清單捲到那一項並標出
+  const notesUp = pane.open && pane.size !== "peek";
+  const [listFocus, setListFocus] = useState<{ id: string; n: number } | null>(null);
+  useEffect(() => {
+    if (!notesUp) setListFocus(null);
+  }, [notesUp]);
+  const [onlyComments, setOnlyComments] = useState(false);
+
+  const openCommentPane = (id: string) => {
+    if (notesUp) {
+      setListFocus((cur) => ({ id, n: (cur?.n ?? 0) + 1 }));
+      return;
+    }
+    setCpId(id);
+    if (!cpLayer) nav.push({ name: "sheet", kind: "commentPane" });
   };
-  const collapseAllComments = () => {
-    setCommentsAll(false);
-    viewRef.current?.collapseComments();
-    void nav.back();
+  /** 點頁面：點在有短評的劃線上（短評標記開著時）打開短評窗格；處理了交回 `true`。 */
+  const commentAt = (x: number, y: number): boolean => {
+    if (!commentsVisible) return false;
+    const id = hl.highlightIdAt(x, y);
+    if (!id || !commented.some((h) => h.id === id)) return false;
+    openCommentPane(id);
+    return true;
+  };
+
+  // 強調框：窗格開著的那一條；筆記窗格開著時是清單標出的那一條
+  const focusId = cpOpen ? cpId : notesUp ? (listFocus?.id ?? null) : null;
+  useEffect(() => {
+    viewRef.current?.setFocus(focusId);
+  }, [focusId, ready, materialId]);
+  /** 把強調框那一條捲到窗格的上方（窗格的大小穩定之後）。 */
+  const revealFocus = (top: number) => {
+    const h = commented.find((x) => x.id === cpId);
+    if (h) viewRef.current?.revealAbove(h.id, h.page.index + 1, top);
+  };
+  const cpStep = (delta: number) => {
+    const next = commented[cpIndex + delta];
+    if (next) setCpId(next.id);
   };
 
   // ---------- 長按劃線：一律開小選單，不受「點內容」開關影響 ----------
@@ -613,7 +663,7 @@ export function Reader(props: {
       void nav.back();
       return;
     }
-    if (!views.tap(x, y, () => hl.tapHighlight(x, y))) setBarVisible((v) => !v);
+    if (!views.tap(x, y, () => hl.tapHighlight(x, y), () => commentAt(x, y))) setBarVisible((v) => !v);
   };
   const onPageTap = (e: React.MouseEvent) => {
     if (brushOn) return;
@@ -721,6 +771,21 @@ export function Reader(props: {
   };
 
   const openJump = () => nav.push({ name: "sheet", kind: "jump" });
+  /** 短評的顯示面板的「短評一覽」：筆記窗格開到半開，劃線清單只列有短評的。 */
+  const [overviewWanted, setOverviewWanted] = useState(false);
+  const openOverview = () => {
+    setOverviewWanted(true);
+    void nav.back();
+  };
+  // 面板退掉之後才開筆記窗格（窗格自己在返回堆疊上推一層，要等堆疊穩定）
+  const menuLayer = props.sheets.includes("commentMenu");
+  useEffect(() => {
+    if (!overviewWanted || menuLayer) return;
+    setOverviewWanted(false);
+    setOnlyComments(true);
+    if (!pane.open || pane.size === "peek") updatePane({ open: true, size: "half" });
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [overviewWanted, menuLayer]);
   const openOutline = () => nav.push({ name: "sheet", kind: "outline" });
 
   const goToOutlineEntry = async (entry: OutlineEntry) => {
@@ -905,7 +970,7 @@ export function Reader(props: {
       icon: <CommentIcon />,
       unavailable: overlayActive,
       onClick: hl.commentTool,
-      // 小箭頭（或長按）：短評的顯示（顯示短評、全部展開、全部收起）
+      // 小箭頭（或長按）：短評的顯示（顯示短評、短評一覽）
       onMore: () => nav.push({ name: "sheet", kind: "commentMenu" }),
       moreLabel: t("reader.tool.comment.more"),
     },
@@ -1136,8 +1201,7 @@ export function Reader(props: {
         open={props.sheets.includes("commentMenu")}
         show={commentsShown}
         onShow={setCommentsShown}
-        onExpandAll={expandAllComments}
-        onCollapseAll={collapseAllComments}
+        onOverview={openOverview}
         onDismiss={() => void nav.back()}
       />
 
@@ -1187,6 +1251,24 @@ export function Reader(props: {
       />
 
       <AnimatePresence>
+        {cpOpen && cpHighlight ? (
+          <CommentPane
+            key="comment-pane"
+            highlight={cpHighlight}
+            index={cpIndex}
+            total={commented.length}
+            onPrev={() => cpStep(-1)}
+            onNext={() => cpStep(1)}
+            onClose={() => void nav.back()}
+            onEdit={() => void nav.back().then(() => hl.editComment(cpHighlight.id))}
+            onDelete={() => void nav.back().then(() => hl.removeHighlight(cpHighlight.id))}
+            onJump={() => revealFocus(document.querySelector(".cm-pane")?.getBoundingClientRect().top ?? window.innerHeight)}
+            onSettled={revealFocus}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {pane.open ? (
           <NotesPane
             key="pane"
@@ -1198,8 +1280,14 @@ export function Reader(props: {
             onSize={(size) => updatePane({ size })}
             onSplit={(f) => updatePane({ split: Math.min(landscape ? 0.75 : 0.85, Math.max(landscape ? 0.25 : 0.2, f)) })}
             onClose={() => updatePane({ open: false })}
-            onJump={(h) => void jumpToHighlight(h)}
+            onJump={(h) => {
+              setListFocus((cur) => ({ id: h.id, n: (cur?.n ?? 0) + 1 }));
+              void jumpToHighlight(h);
+            }}
             onDelete={hl.removeHighlight}
+            onlyComments={onlyComments}
+            onOnlyComments={setOnlyComments}
+            focus={listFocus}
             hiddenIds={hl.pending}
             onMessage={setToast}
             onOpenExternal={(obsidian) => void openExternal(obsidian)}

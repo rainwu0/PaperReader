@@ -58,6 +58,7 @@ export type SheetKind =
   /** 閱讀畫面：一條劃線的短評；短評的顯示（工具箱「短評」旁的小箭頭）。 */
   | "highlightEdit"
   | "commentMenu"
+  | "commentPane"
   | "addIntro"
   | "inTrash"
   | "privateNotice"

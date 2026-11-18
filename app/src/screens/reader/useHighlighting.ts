@@ -43,7 +43,7 @@ export function useHighlighting(o: {
     notesRef.current = notes;
   });
   const settled = useRef(new Set<string>());
-  /** 刪一條劃線（頁面上的小選單、短評面板、筆記窗格、短評卡片都用這個）：可以復原一次。 */
+  /** 刪一條劃線（頁面上的小選單、短評面板、筆記窗格、短評窗格都用這個）：可以復原一次。 */
   const removeHighlight = useCallback(
     (id: string) => {
       settled.current.delete(id);
@@ -157,7 +157,7 @@ export function useHighlighting(o: {
   );
 
   /**
-   * 整段寫短評：畫面上一點（選取的第一行、或點的那一段）所在的整段選起來，存成一條劃線、打開短評面板。
+   * 整段短評：畫面上一點（選取的第一行、或點的那一段）所在的整段選起來，存成一條劃線、打開短評面板。
    * 段落的範圍用現有的分段（譯文疊加檔的段落，沒有就用這一頁的版面分析）；不加新的資料格式。
    */
   const paragraphComment = useCallback(
@@ -256,7 +256,7 @@ export function useHighlighting(o: {
     removeHighlight(id);
   };
 
-  /** 「短評」工具：有選字就劃線並寫短評；沒有選字就用這一頁頁首附近的第一行當依據。 */
+  /** 「短評」工具：有選字就劃線並寫短評（選字工具列的「短評」同）；沒有選字就用這一頁頁首附近的第一行當依據。 */
   const commentTool = () => {
     if (!o.canMark) {
       setToast(t("reader.highlight.translationNote"));
@@ -280,7 +280,7 @@ export function useHighlighting(o: {
     setHighlightMode(!highlightMode);
   };
 
-  /** 短評卡片的「編輯」：打開短評面板。 */
+  /** 短評窗格的「編輯」：打開短評面板。 */
   const editComment = (id: string) => {
     setEditId(id);
     nav.push({ name: "sheet", kind: "highlightEdit" });

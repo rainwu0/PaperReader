@@ -65,7 +65,8 @@ export const updateStrings = {
   "update.installer.back": "沒有裝上新版。如果系統的安裝程式顯示了錯誤，請截下那個畫面回報。",
   "update.installer.noApp": "這台手機找不到可以安裝的系統程式。",
 
-  // 小米且「MIUI 最佳化」開著
+  // 小米且「MIUI 最佳化」開著：和這一版的說明分開，標明是這台手機的提醒
+  "update.deviceNote.title": "這台手機的提醒",
   "update.miui":
     "在小米手機上，「MIUI 最佳化」開著時，系統可能中止應用內更新。失敗時畫面會寫出系統給的原因，也可以改按「用系統安裝程式開啟」。",
 

@@ -219,7 +219,7 @@ export function SegmentPop(props: {
   onEdit: () => void;
   onSave: (text: string) => Promise<string | null>;
   onCancelEdit: () => void;
-  /** 整段寫短評；原頁疊譯文上不能劃線時不給。 */
+  /** 整段短評；原頁疊譯文上不能劃線時不給。 */
   onComment?: (() => void) | undefined;
 }) {
   const { seg, anchor } = props;

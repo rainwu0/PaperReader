@@ -56,7 +56,7 @@ export function useReaderViews(o: {
   /** 有重點筆記：沒有譯本時「譯本」改開它。 */
   hasDigest: boolean;
   openDigest: () => void;
-  /** 點一段的小框裡的「整段寫短評」。 */
+  /** 點一段的小框裡的「整段短評」。 */
   onParagraphComment: (box: SegTarget) => void;
 }) {
   const { paperId, nav, sheets, materials, materialId, ready, viewRef, setToast } = o;
@@ -179,14 +179,16 @@ export function useReaderViews(o: {
     if (pop && popLayer && !pop.editing) void nav.back();
   };
   /**
-   * 點頁面（單擊），依序：小框開著就收起；「點內容」關著只顯示或隱藏頂列；點在劃線上
-   * （`contentFirst`）開短評；點在引用標記上出卡片；點疊譯文暫看原文、點一段出小框。處理了交回 `true`。
+   * 點頁面（單擊），依序：小框開著就收起；點在有短評的劃線上（`commentFirst`，短評標記開著時）打開短評窗格；
+   * 「點內容」關著只顯示或隱藏頂列；點在劃線上（`contentFirst`）開小選單；點在引用標記上出卡片；
+   * 點疊譯文暫看原文、點一段出小框。處理了交回 `true`。
    */
-  const tap = (x: number, y: number, contentFirst: () => boolean): boolean => {
+  const tap = (x: number, y: number, contentFirst: () => boolean, commentFirst: () => boolean): boolean => {
     if (popLayer) {
       void nav.back();
       return true;
     }
+    if (commentFirst()) return true;
     if (!tapContent) return false;
     if (contentFirst()) return true;
     if (tapRegion(x, y)) return true;
@@ -246,7 +248,7 @@ export function useReaderViews(o: {
         onEdit: () => setPop({ ...pop, editing: true }),
         onSave: savePop,
         onCancelEdit: () => setPop({ ...pop, editing: false }),
-        // 整段寫短評：小框收起，整段存成一條劃線、打開短評面板
+        // 整段短評：小框收起，整段存成一條劃線、打開短評面板
         onComment: !overlayActive ? () => void nav.back().then(() => o.onParagraphComment({ page: popSeg.page, bbox: popSeg.bbox })) : undefined,
       }
     : null;

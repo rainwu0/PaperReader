@@ -317,106 +317,139 @@
   }
 }
 
-/* ---------- 短評顯示層：頁緣的標記、點了展開的卡片 ----------
-   在頁面最上面一層（蓋過文字層與筆刷），只有標記與卡片接點按，其餘讓給選字與捲動。
-   頁面是白紙，卡片也用紙的顏色，不跟著主題換；蓋到正文時是半透明的底（只用背景色的透明度，不另開合成層） */
+/* ---------- 短評標記：有短評的劃線，第一行行尾的右上方，像註腳的上標 ----------
+   在頁面最上面一層，只是記號、不接觸控：點劃線本身開短評窗格，標記旁邊的字照常長按選字。
+   標記和劃線一樣在頁面裡，跟著縮放；短評的內容不在頁面裡，在畫面層的短評窗格（`.cm-pane`）。
+   行與行之間的空白比標記小，所以整層用色彩增值（和劃線一樣）：底下的字仍是黑的、看得清，標記只是染上色 */
 .cm-layer {
   position: absolute;
   inset: 0;
   z-index: 4;
   pointer-events: none;
+  mix-blend-mode: multiply;
 }
 
 .cm-mark {
   position: absolute;
-  z-index: 1; /* 在卡片之上：卡片展開後仍點得到標記收起 */
-  width: 22px;
-  height: 22px;
+  width: var(--s, 5px);
+  height: var(--s, 5px);
+  border-radius: 1px 1px 1px 0;
+  background: #e08a00;
+}
+
+/* 短評窗格開著的那一條劃線：加一圈強調框 */
+.hl.focus {
+  outline: 2px solid rgba(176, 90, 0, 0.95);
+  outline-offset: 1px;
+}
+
+/* ---------- 短評窗格：畫面下方，不蓋住背後的頁面（背後仍可捲、可點） ----------
+   在畫面層（不在 `.pg` 裡），不受雙指縮放與雙擊放大影響；底色不透明，用介面的主題色。
+   高度照內容、最多畫面高的 40%；拉高時 `style` 給高度與到 90% 的上限 */
+.cm-pane {
+  position: fixed;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  bottom: var(--pane-lift, var(--inset-bottom));
+  display: flex;
+  flex-direction: column;
+  max-height: 40vh;
+  border-top: 1.5px solid var(--border);
+  background: var(--paper);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.cmp-handle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.cmp-handle span {
+  display: block;
+  width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.cmp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--gutter, 16px);
+}
+
+.cmp-quote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  min-height: var(--tap);
   padding: 0;
-  border: 1.5px solid rgba(140, 92, 0, 0.95);
-  border-radius: 6px 6px 6px 1px;
-  background: #ffe9a8;
-  pointer-events: auto;
-}
-
-/* 手指按的範圍比看得到的大：48 像素見方 */
-.cm-mark::before {
-  content: "";
-  position: absolute;
-  inset: -13px;
-}
-
-/* 對話框的樣子：中間一條短線 */
-.cm-mark::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  top: 8px;
-  height: 2px;
-  border-radius: 1px;
-  background: rgba(140, 92, 0, 0.95);
-  box-shadow: 0 4px 0 rgba(140, 92, 0, 0.95);
-}
-
-.cm-mark[aria-expanded="true"] {
-  background: #f2b400;
-}
-
-/* 寬度照內容：短評短的卡片窄、長的到最寬（`style.maxWidth`，由 pdfView 照旁邊的空間給）換行；寫明 max-content，
-   寬度才不會跟著放的位置變（絕對定位、寬度自動時會照「左緣到頁緣」的空間縮） */
-.cm-card {
-  position: absolute;
-  width: max-content;
-  margin: 0;
-  padding: 6px 10px 0;
-  border: 1px solid rgba(140, 92, 0, 0.55);
-  border-radius: 8px;
-  background: rgba(255, 251, 236, 0.9);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
-  color: #1f1f1f;
-  font-size: 15px;
-  line-height: 1.45;
-  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 14px;
   text-align: left;
 }
 
-.cm-card p {
-  margin: 0;
+.cmp-page {
+  font-weight: 600;
 }
 
-/* 引句不撐寬卡片（寬度由短評與按鈕決定）：自己的寬度算 0、再撐滿卡片，放不下的截成刪節號 */
-.cm-quote {
-  width: 0;
-  min-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: #5b5b5b;
-  font-size: 13px;
+.cmp-quote-text {
+  overflow-wrap: anywhere;
 }
 
-.cm-text {
-  max-height: 14em;
-  overflow-y: auto;
+.cmp-text {
+  margin: 4px 0 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.cm-actions {
+.cmp-actions {
+  flex: none;
   display: flex;
-  justify-content: flex-end;
-  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 2px;
+  padding: 0 calc(var(--gutter, 16px) - 8px) 4px;
+  border-top: 1px solid var(--divider);
 }
 
-.cm-actions button {
+.cmp-actions button {
+  min-width: var(--tap);
   min-height: var(--tap);
-  padding: 0 10px;
+  padding: 0 8px;
   border: 0;
   background: transparent;
-  color: #1f3d8f;
+  color: var(--accent);
   font-size: 15px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.cmp-actions button:disabled {
+  color: var(--text-2);
+  opacity: 0.5;
+}
+
+.cmp-spacer {
+  flex: 1;
+}
+
+.cmp-pos {
+  color: var(--text-2);
+  font-size: 14px;
 }
 
 /* 筆刷的畫布：平常不接觸控；筆刷打開時，手指在頁面上畫 */
@@ -445,7 +478,11 @@
   translate: -50% 0; /* 個別的 translate：transform 留給轉換 */
   z-index: 9;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 2px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
   padding: 4px;
   border: 1.5px solid var(--border);
   border-radius: 12px;
@@ -456,6 +493,8 @@
 .sel-pill button {
   min-height: var(--tap);
   min-width: var(--tap);
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 0 14px;
   border: 0;
   border-radius: 8px;
@@ -1166,9 +1205,42 @@
   background: var(--accent-soft);
 }
 
+.notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
 .notes-section {
-  margin: 20px 0 8px;
+  margin: 0;
   font-size: var(--fs-md);
+}
+
+/* 「短評一覽」：劃線清單只列有短評的 */
+.notes-filter {
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.notes-filter[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 點了頁面上的短評標記（筆記窗格開著時）：清單裡標出那一項 */
+.notes-item.focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
 }
 
 .notes-readonly {

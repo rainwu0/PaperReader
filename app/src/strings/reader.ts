@@ -29,7 +29,7 @@ export const readerStrings = {
   "reader.darkPages.toAppearance": "外觀設定",
 
   // 劃線
-  "reader.highlight.withComment": "劃線並寫短評",
+  "reader.highlight.withComment": "短評",
   "reader.highlight.saved": "已劃線。點一下劃線可以刪除或寫短評。",
   "reader.highlight.menu": "這條劃線",
   "reader.highlight.delete": "刪除",
@@ -41,8 +41,8 @@ export const readerStrings = {
   "reader.highlight.lost": "{n} 條劃線找不到原位置，引句與短評仍在筆記。",
   "reader.highlight.translationNote": "原頁疊譯文上不能劃線。",
   "reader.highlight.noText": "這一頁選不到文字（可能是掃描檔）。",
-  "reader.highlight.paragraph": "整段寫短評",
-  "reader.highlight.noParagraph": "找不到這一段的範圍，可以拖選取的把手選整段再按「劃線並寫短評」。",
+  "reader.highlight.paragraph": "整段短評",
+  "reader.highlight.noParagraph": "找不到這一段的範圍，可以拖選取的把手選整段再按「短評」。",
   "reader.edit.title": "劃線與短評",
   "reader.edit.hint": "寫一兩句話…",
   "reader.edit.delete": "刪除這條劃線",
@@ -51,12 +51,20 @@ export const readerStrings = {
   "reader.tool.comment.more": "短評的顯示",
   "reader.comments.title": "短評",
   "reader.comments.show": "顯示短評",
-  "reader.comments.about": "開著時，有短評的劃線在頁緣有一個標記，點標記展開或收起短評。",
-  "reader.comments.expandAll": "全部展開",
-  "reader.comments.collapseAll": "全部收起",
-  "reader.comments.mark": "短評：{quote}",
+  "reader.comments.about": "開著時，有短評的劃線在第一行行尾有一個標記；點標記或劃線，下方打開短評窗格。",
+  "reader.comments.overview": "短評一覽",
+  "reader.comments.overview.hint": "在筆記窗格裡只列有短評的劃線，點一項跳到那一條。",
   "reader.comments.edit": "編輯",
   "reader.comments.delete": "刪除",
+
+  // 短評窗格：點有短評的劃線時，畫面下方打開的窗格
+  "reader.cpane.title": "短評窗格",
+  "reader.cpane.resize": "拉高或往下滑關掉短評窗格",
+  "reader.cpane.toHighlight": "回到劃線：{page}",
+  "reader.cpane.position": "第 {n} 則，共 {total} 則",
+  "reader.cpane.prev": "上一則",
+  "reader.cpane.next": "下一則",
+  "reader.cpane.close": "關閉",
 
   // 跳到別處之後（大綱、跳頁、筆記窗格、連結）
   "reader.back": "回到第 {page} 頁",
@@ -103,6 +111,7 @@ export const readerStrings = {
   "reader.notes.openFailed": "沒能打開筆記檔。",
   "reader.notes.highlights": "劃線（{n}）",
   "reader.notes.empty": "還沒有劃線。長按文字就能劃線。",
+  "reader.notes.noComments": "還沒有短評。",
   "reader.notes.noComment": "（沒有短評）",
   "reader.notes.edit": "寫或改{page}這條劃線的短評",
   "reader.notes.delete": "刪除{page}這條劃線",

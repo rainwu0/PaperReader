@@ -50,6 +50,11 @@ export function NotesPane(props: {
   onDelete: (id: string) => void;
   /** 剛刪、還能復原的：先不列。 */
   hiddenIds: readonly string[];
+  /** 「短評一覽」：劃線清單只列有短評的。 */
+  onlyComments: boolean;
+  onOnlyComments: (on: boolean) => void;
+  /** 清單裡標出的那一條（`n` 每次加一：同一條再點一次也再捲過去一次）。 */
+  focus: { id: string; n: number } | null;
   onMessage: (m: string) => void;
   onOpenExternal: (obsidian: boolean) => void;
 }) {
@@ -231,7 +236,18 @@ export function NotesPane(props: {
     drag.current = null;
   };
 
-  const highlights = (doc?.highlights ?? []).filter((h) => !props.hiddenIds.includes(h.id));
+  const all = (doc?.highlights ?? []).filter((h) => !props.hiddenIds.includes(h.id));
+  const highlights = props.onlyComments ? all.filter((h) => h.comment.trim() !== "") : all;
+
+  // 點了頁面上有短評的劃線（筆記窗格開著時）：清單捲到那一項
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusN = props.focus?.n;
+  const focusId = props.focus?.id;
+  useEffect(() => {
+    if (!focusId) return;
+    const el = [...(listRef.current?.children ?? [])].find((li) => (li as HTMLElement).dataset["hid"] === focusId);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [focusId, focusN]);
   const stateText =
     state === "saving"
       ? t("reader.notes.saving")
@@ -443,11 +459,28 @@ export function NotesPane(props: {
 
         {doc ? (
           <>
-            <h3 className="notes-section">{t("reader.notes.highlights", { n: highlights.length })}</h3>
-            {highlights.length === 0 ? <p className="muted">{t("reader.notes.empty")}</p> : null}
-            <ul className="notes-list">
+            <div className="notes-head">
+              <h3 className="notes-section">{t("reader.notes.highlights", { n: highlights.length })}</h3>
+              <button
+                type="button"
+                className="notes-filter"
+                aria-pressed={props.onlyComments}
+                onClick={() => props.onOnlyComments(!props.onlyComments)}
+              >
+                {t("reader.comments.overview")}
+              </button>
+            </div>
+            {highlights.length === 0 ? (
+              <p className="muted">{props.onlyComments ? t("reader.notes.noComments") : t("reader.notes.empty")}</p>
+            ) : null}
+            <ul className="notes-list" ref={listRef}>
               {highlights.map((h) => (
-                <li key={h.id} className="notes-item">
+                <li
+                  key={h.id}
+                  data-hid={h.id}
+                  className={h.id === props.focus?.id ? "notes-item focus" : "notes-item"}
+                  aria-current={h.id === props.focus?.id ? "true" : undefined}
+                >
                   <div className="notes-main">
                     <button type="button" className="notes-jump" onClick={() => props.onJump(h)}>
                       <span className="notes-page">{pageText(h)}</span>

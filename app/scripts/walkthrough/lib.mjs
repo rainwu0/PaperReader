@@ -390,7 +390,7 @@ export function systemLongPressMs() {
 
 /**
  * 長按網頁元素（`adb shell input swipe x y x y 毫秒`）。至少按到系統的長按時限再多 0.6 秒：
- * 時限調成「中」「長」的模擬器上，固定按 0.9 秒不算長按（驗收時等不到「劃線並寫短評」就是這樣）。
+ * 時限調成「中」「長」的模擬器上，固定按 0.9 秒不算長按（驗收時等不到「短評」按鈕就是這樣）。
  */
 export async function longPressReal(selector, ms = 800, opts) {
   await screenRect(selector, opts);

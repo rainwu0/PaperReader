@@ -2,7 +2,7 @@
 // 執行：node --test scripts/toolbox-test.mjs（在 app 底下）
 //
 // 0.1.3 的錯：面板寬度自動，固定定位時寬度跟著「左緣到畫面右緣」的空間；每次重畫把面板往左夾 4 像素，寬度就多 4 像素，
-// 越點越寬。這裡驗兩件事：夾位置的算法再夾一次不會再動；面板與評語卡片的寬度在樣式裡寫明照內容（不是自動）。
+// 越點越寬。這裡驗兩件事：夾位置的算法再夾一次不會再動；面板的寬度在樣式裡寫明照內容（不是自動）。
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -45,8 +45,7 @@ function rule(css, selector) {
   return m[2];
 }
 
-test("浮動工具箱與評語卡片的寬度照內容，不跟著位置變", () => {
+test("浮動工具箱的寬度照內容，不跟著位置變", () => {
   const css = readFileSync(new URL("../src/ui/reader.css", import.meta.url), "utf8");
   assert.match(rule(css, ".tb-float"), /\n\s*width: max-content;/, ".tb-float 要寫明 width: max-content");
-  assert.match(rule(css, ".cm-card"), /\n\s*width: max-content;/, ".cm-card 要寫明 width: max-content");
 });
