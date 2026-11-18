@@ -1,0 +1,1662 @@
+//! 翻譯：服務清單與金鑰、提示詞、術語庫、建立譯本、背景翻譯、進度與取消、換備用服務、
+//! 幾個服務並排比較、匯出給翻譯軟體。
+//!
+//! 資料規則在核心（譯文疊加檔），引擎在 `paperreader-translate`；這裡只轉接。
+//! 金鑰只在這裡從外掛取出、交給引擎，不進任何回傳值與記錄。
+
+use crate::error::{ApiError, ApiResult, ErrorKind};
+use crate::interchange::{self, Format};
+use crate::ondevice::{self, BergamotDevice, Bridge};
+use crate::state::AppState;
+use crate::translate::{
+    FallbackOffer, Job, JobSlot, JobState, JobStatus, PromptPreset, PromptSection, Service,
+    ServiceUsage, TranslateSettings, USAGE_FILE, UsageLog, api_kind, new_id, offers_fallback,
+    validate_preset,
+};
+use paperreader_core::overlay::{
+    OVERLAY_FORM, OverlayDraft, OverlayFile, OverlaySegment, OverlayTerm, STATUS_DONE,
+    STATUS_FAILED, SegmentDraft, SegmentService, SegmentUpdate, TERM_CANDIDATE, TERM_LEARNED,
+    TERM_REMOVED, TERM_USER,
+};
+use paperreader_translate::glossary::{self, Term};
+use paperreader_translate::{
+    BUILTIN_PRESETS, Cancel, DigestInput, DigestSegment, Engine, EngineConfig, Need, PaperTerm,
+    Params, PresetKind, PromptPreview, Provider, Segment, TermState, TokenUsage, digest_preview,
+    refine_preview, run_job, terms_in_use, translate_preview,
+};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_paperreader::PaperReaderExt;
+
+// ---------- 設定 ----------
+
+/// 畫面看到的一個服務：設定加上有沒有金鑰、文字實際會送到哪個主機。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceView {
+    #[serde(flatten)]
+    pub service: Service,
+    pub has_key: bool,
+    /// 論文的文字會送到的主機（離線引擎是空的）。DeepL 免費版的金鑰送到 `api-free.deepl.com`：
+    /// 畫面讀不到金鑰，所以由這裡告知。
+    pub host: String,
+}
+
+/// 一組提示詞預設組（實際的內容；內建的名稱由畫面的文字表提供）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetView {
+    pub id: String,
+    pub name: String,
+    pub kind: PresetKind,
+    pub text: String,
+    pub sections: Vec<PromptSection>,
+    pub builtin: bool,
+    /// 內建的、使用者改過（可以「還原預設」）。
+    pub modified: bool,
+}
+
+/// 畫面看到的設定：不含金鑰。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub services: Vec<ServiceView>,
+    pub primary: String,
+    pub fallbacks: Vec<String>,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub skip_confirm: bool,
+    pub prompt: String,
+    /// 重點筆記選用的預設組。
+    pub digest_prompt: String,
+    /// 內建的在前（改過的是改過的內容），自訂的在後；兩種用途都在。
+    pub prompts: Vec<PresetView>,
+    pub refine: bool,
+    /// 離線引擎的語言模型只在 Wi-Fi 下載（在 Firefox 翻譯那一筆的頁面裡設）。
+    pub wifi_only: bool,
+    /// 這個平台能不能安全地存金鑰（Android 以外不能）。
+    pub secrets_supported: bool,
+    /// 上次用來翻的服務。
+    pub last_service: Option<String>,
+    /// 上次用來產生重點筆記的服務。
+    pub last_digest_service: Option<String>,
+}
+
+/// 文字實際會送到的主機。
+pub(crate) async fn host_of(app: &AppHandle, s: &Service) -> String {
+    if s.provider.is_on_device() {
+        return String::new();
+    }
+    let e = s.endpoint.trim();
+    if !e.is_empty() {
+        return e
+            .split("://")
+            .nth(1)
+            .unwrap_or(e)
+            .split('/')
+            .next()
+            .unwrap_or(e)
+            .to_string();
+    }
+    // DeepL 免費版的金鑰以 `:fx` 結尾，會送到另一個主機
+    if s.provider == Provider::Deepl
+        && let Ok(Some(k)) = app.paperreader().secret_get(&s.id).await
+        && k.ends_with(":fx")
+    {
+        return "api-free.deepl.com".to_string();
+    }
+    s.provider.info().official_host.to_string()
+}
+
+async fn settings_view(app: &AppHandle, t: TranslateSettings) -> SettingsView {
+    let (keys, supported) = match app.paperreader().secret_names().await {
+        Ok(names) => (names, true),
+        Err(_) => (Vec::new(), false),
+    };
+    let mut services = Vec::with_capacity(t.services.len());
+    for s in &t.services {
+        services.push(ServiceView {
+            has_key: keys.contains(&s.id),
+            host: host_of(app, s).await,
+            service: s.clone(),
+        });
+    }
+    let view = |p: PromptPreset, builtin: bool, modified: bool| PresetView {
+        id: p.id,
+        name: if builtin { String::new() } else { p.name },
+        kind: p.kind,
+        text: p.text,
+        sections: p.sections,
+        builtin,
+        modified,
+    };
+    let prompts = BUILTIN_PRESETS
+        .iter()
+        .map(|b| match t.prompts.iter().find(|p| p.id == b.id) {
+            Some(p) => view(p.clone(), true, true),
+            None => view(PromptPreset::from_builtin(b), true, false),
+        })
+        .chain(
+            t.prompts
+                .iter()
+                .filter(|p| paperreader_translate::builtin_preset(&p.id).is_none())
+                .map(|p| view(p.clone(), false, false)),
+        )
+        .collect();
+    SettingsView {
+        services,
+        primary: t.primary,
+        fallbacks: t.fallbacks,
+        source_lang: t.source_lang,
+        target_lang: t.target_lang,
+        skip_confirm: t.skip_confirm,
+        prompt: t.prompt,
+        digest_prompt: t.digest_prompt,
+        prompts,
+        refine: t.refine,
+        wifi_only: t.wifi_only,
+        secrets_supported: supported,
+        last_service: t.last_service,
+        last_digest_service: t.last_digest_service,
+    }
+}
+
+#[tauri::command]
+pub async fn translate_settings_get(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> ApiResult<SettingsView> {
+    Ok(settings_view(&app, state.translate_settings()).await)
+}
+
+/// 改設定的一部分：只改給了的欄位。服務本身用 `translate_service_*`。
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SettingsPatch {
+    pub primary: Option<String>,
+    pub fallbacks: Option<Vec<String>>,
+    pub source_lang: Option<String>,
+    pub target_lang: Option<String>,
+    pub skip_confirm: Option<bool>,
+    pub prompt: Option<String>,
+    pub digest_prompt: Option<String>,
+    pub prompts: Option<Vec<PromptPreset>>,
+    pub refine: Option<bool>,
+    pub wifi_only: Option<bool>,
+    /// 這次用來翻的服務。不在服務清單裡的不記。
+    pub last_service: Option<String>,
+    /// 這次用來產生重點筆記的服務。不在服務清單裡的不記。
+    pub last_digest_service: Option<String>,
+}
+
+#[tauri::command]
+pub async fn translate_settings_patch(
+    state: State<'_, AppState>,
+    patch: SettingsPatch,
+) -> ApiResult<()> {
+    state
+        .run("translate_settings_patch", move |s| {
+            s.update_translate(|t| {
+                if let Some(v) = patch.primary {
+                    t.fallbacks.retain(|f| f != &v);
+                    t.primary = v;
+                }
+                if let Some(v) = patch.fallbacks {
+                    t.fallbacks = v;
+                }
+                if let Some(v) = patch.source_lang {
+                    t.source_lang = v;
+                }
+                if let Some(v) = patch.target_lang {
+                    t.target_lang = v;
+                }
+                if let Some(v) = patch.skip_confirm {
+                    t.skip_confirm = v;
+                }
+                if let Some(v) = patch.prompts {
+                    t.prompts = v;
+                    // 選用的那一組被刪掉了：改回內建的
+                    t.fix_selection();
+                }
+                if let Some(v) = patch.prompt {
+                    t.prompt = v;
+                }
+                if let Some(v) = patch.digest_prompt {
+                    t.digest_prompt = v;
+                }
+                if let Some(v) = patch.refine {
+                    t.refine = v;
+                }
+                if let Some(v) = patch.wifi_only {
+                    t.wifi_only = v;
+                }
+                if let Some(v) = patch.last_service
+                    && t.service(&v).is_some()
+                {
+                    t.last_service = Some(v);
+                }
+                if let Some(v) = patch.last_digest_service
+                    && t.service(&v).is_some()
+                {
+                    t.last_digest_service = Some(v);
+                }
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await
+}
+
+/// 存一組提示詞預設組（依代號取代，沒有就加在後面）。代號是內建的：存成改過的內建組（「還原預設」用
+/// `translate_prompt_delete`）。只改這一組，不拿畫面上的整份清單蓋回去。
+#[tauri::command]
+pub async fn translate_prompt_save(
+    state: State<'_, AppState>,
+    preset: PromptPreset,
+) -> ApiResult<()> {
+    validate_preset(&preset)?;
+    state
+        .run("translate_prompt_save", move |s| {
+            s.update_translate(|t| {
+                match t.prompts.iter_mut().find(|p| p.id == preset.id) {
+                    Some(slot) if slot.kind != preset.kind => {
+                        return Err(ApiError::new(ErrorKind::InvalidInput, "prompt kind"));
+                    }
+                    Some(slot) => *slot = preset,
+                    None => t.prompts.push(preset),
+                }
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await
+}
+
+/// 刪一組自訂的預設組，或把改過的內建組還原預設。選用的那一組被刪掉時改回內建的。
+#[tauri::command]
+pub async fn translate_prompt_delete(state: State<'_, AppState>, id: String) -> ApiResult<()> {
+    state
+        .run("translate_prompt_delete", move |s| {
+            s.update_translate(|t| {
+                t.prompts.retain(|p| p.id != id);
+                t.fix_selection();
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await
+}
+
+/// 「看完整提示詞」用的範例原文（實際送出時換成論文的段落）。
+const SAMPLE_BEFORE: &str = "The previous paragraph is sent as context only.";
+
+/// 看完整提示詞：用 `preset`（可以是還沒存的草稿）與這篇的篇名、術語庫、這篇的術語，替一段範例原文
+/// 組出實際會送出的每一次請求。和翻譯、重點筆記實際送出的用同一組函式產生，逐字相同；固定的部分標 `fixed`。
+/// `refine` 開著時多列第二輪潤飾那一次；`material_id`（接著翻的那份譯本）給了就用它自己的語言與術語，
+/// 沒給用目前的設定與新的一份建立時會帶過去的術語（使用者的決定）；重點筆記用這篇最新那份同語言譯本照用的術語。
+#[tauri::command]
+pub async fn prompt_preview(
+    state: State<'_, AppState>,
+    preset: PromptPreset,
+    paper_id: Option<String>,
+    material_id: Option<String>,
+    refine: Option<bool>,
+) -> ApiResult<Vec<PromptPreview>> {
+    validate_preset(&preset)?;
+    let t = state.translate_settings();
+    let (title, overlay) = match paper_id.clone() {
+        Some(pid) => {
+            let mid = material_id.clone();
+            state
+                .lib("prompt_preview", move |l| {
+                    let (p, _) = l.get_paper(&pid)?;
+                    let overlay = match mid {
+                        Some(m) => Some(l.read_overlay(&pid, &m)?.0),
+                        None => None,
+                    };
+                    Ok((p.bib.title.filter(|t| !t.trim().is_empty()), overlay))
+                })
+                .await?
+        }
+        None => (None, None),
+    };
+    let (source_lang, target_lang) = match &overlay {
+        Some(d) => (d.source_lang.clone(), d.target_lang.clone()),
+        None => (
+            Some(t.source_lang.clone()).filter(|l| !l.is_empty()),
+            t.target_lang.clone(),
+        ),
+    };
+    // 翻譯：接著翻用那份譯本的；新的一份用建立時會帶過去的（使用者的決定，`inherited_terms`）。
+    // 重點筆記：這篇最新那份同語言譯本照用的（同 `digest_run`）
+    let terms = match (&overlay, &paper_id, preset.kind) {
+        (Some(d), _, _) => terms_in_use(&to_paper_terms(&d.terms)),
+        (None, Some(p), PresetKind::Translation) => terms_in_use(&to_paper_terms(
+            &inherited_terms(&latest_overlay_entries(&state, p, &target_lang).await),
+        )),
+        (None, Some(p), PresetKind::Digest) => latest_overlay_terms(&state, p, &target_lang).await,
+        (None, None, _) => Vec::new(),
+    };
+    let sample = Segment {
+        id: "g0001".to_string(),
+        text: TEST_SENTENCE.to_string(),
+        before: Some(SAMPLE_BEFORE.to_string()),
+    };
+    Ok(match preset.kind {
+        PresetKind::Translation => {
+            let params = Params {
+                instructions: preset.text,
+                refine: false,
+                ..params_for(&state, &t, source_lang, target_lang, title)
+            };
+            let batch = std::slice::from_ref(&sample);
+            let mut out = vec![translate_preview(&params, batch, &terms)];
+            if refine.unwrap_or(false) {
+                out.push(refine_preview(
+                    &params,
+                    batch,
+                    &[SAMPLE_DRAFT.to_string()],
+                    &terms,
+                ));
+            }
+            out
+        }
+        PresetKind::Digest => vec![digest_preview(&DigestInput {
+            title,
+            abstract_text: None,
+            segments: vec![DigestSegment {
+                id: "g0001".to_string(),
+                page: 0,
+                text: TEST_SENTENCE.to_string(),
+            }],
+            target_lang,
+            instructions: preset.text.clone(),
+            sections: preset.section_specs(),
+            glossary: user_glossary(&state),
+            paper_terms: terms,
+        })],
+    })
+}
+
+/// 「看完整提示詞」第二輪潤飾那一次的範例草稿（實際送出時是第一次請求的譯文）。
+const SAMPLE_DRAFT: &str = "（第一次請求的譯文）";
+
+/// 一組預設組哪裡不合規則（設定的編輯畫面用；規則只有外殼這一份，`validate_preset`）：合規則交回 `None`，
+/// 否則交回原因的代號（`prompt name`、`section label` 等）。
+#[tauri::command]
+pub async fn prompt_check(preset: PromptPreset) -> ApiResult<Option<String>> {
+    Ok(validate_preset(&preset).err().map(|e| e.detail))
+}
+
+// ---------- 這份譯本的術語（記在譯文疊加檔） ----------
+
+/// 疊加檔記的術語 → 引擎用的（狀態不認得的略過）。
+pub(crate) fn to_paper_terms(terms: &[OverlayTerm]) -> Vec<PaperTerm> {
+    terms
+        .iter()
+        .filter_map(|t| {
+            let state = match t.state.as_str() {
+                TERM_CANDIDATE => TermState::Candidate,
+                TERM_LEARNED => TermState::Learned,
+                TERM_USER => TermState::User,
+                TERM_REMOVED => TermState::Removed,
+                _ => return None,
+            };
+            Some(PaperTerm {
+                source: t.source.clone(),
+                target: t.target.clone(),
+                state,
+                batches: t.batches,
+            })
+        })
+        .collect()
+}
+
+/// 引擎的術語 → 寫進疊加檔的。原本就有的那一條（原文詞相同）留著它不認得的欄位；
+/// 狀態這一版不認得的原樣留在後面。
+pub(crate) fn to_overlay_terms(terms: &[PaperTerm], old: &[OverlayTerm]) -> Vec<OverlayTerm> {
+    let mut out: Vec<OverlayTerm> = terms
+        .iter()
+        .map(|t| {
+            let extra = old
+                .iter()
+                .find(|o| o.source.eq_ignore_ascii_case(&t.source))
+                .map(|o| o.extra.clone())
+                .unwrap_or_default();
+            OverlayTerm {
+                source: t.source.clone(),
+                target: t.target.clone(),
+                state: match t.state {
+                    TermState::Candidate => TERM_CANDIDATE,
+                    TermState::Learned => TERM_LEARNED,
+                    TermState::User => TERM_USER,
+                    TermState::Removed => TERM_REMOVED,
+                }
+                .to_string(),
+                batches: t.batches,
+                extra,
+            }
+        })
+        .collect();
+    for o in old {
+        let known =
+            [TERM_CANDIDATE, TERM_LEARNED, TERM_USER, TERM_REMOVED].contains(&o.state.as_str());
+        if !known && !out.iter().any(|t| t.source.eq_ignore_ascii_case(&o.source)) {
+            out.push(o.clone());
+        }
+    }
+    out
+}
+
+/// 新的一份譯本（整篇重翻）從這篇最新那份同語言譯本帶過來的術語：只帶使用者的決定（改的、刪的）。
+/// 學到的不帶：整篇重翻常是為了換掉不好的譯法，新的一份重新學。
+pub(crate) fn inherited_terms(old: &[OverlayTerm]) -> Vec<OverlayTerm> {
+    old.iter()
+        .filter(|t| t.state == TERM_USER || t.state == TERM_REMOVED)
+        .cloned()
+        .collect()
+}
+
+/// 這篇最新那份同語言譯本記的術語（全部）；沒有是空的。讀不到不擋事情，只是沒有術語。
+async fn latest_overlay_entries(state: &AppState, paper_id: &str, lang: &str) -> Vec<OverlayTerm> {
+    let (pid, lang) = (paper_id.to_string(), lang.to_string());
+    state
+        .lib("overlay_terms_latest", move |l| {
+            let (paper, _) = l.get_paper(&pid)?;
+            for m in paper.materials.iter().rev().filter(|m| {
+                m.role == paperreader_core::format::ROLE_TRANSLATION && m.form == OVERLAY_FORM
+            }) {
+                if let Ok((d, _)) = l.read_overlay(&pid, &m.id)
+                    && d.target_lang.eq_ignore_ascii_case(&lang)
+                {
+                    return Ok(d.terms);
+                }
+            }
+            Ok(Vec::new())
+        })
+        .await
+        .unwrap_or_default()
+}
+
+/// 這篇最新那份同語言譯本照用的術語（重點筆記、預覽用）。
+pub(crate) async fn latest_overlay_terms(
+    state: &AppState,
+    paper_id: &str,
+    lang: &str,
+) -> Vec<(String, String)> {
+    terms_in_use(&to_paper_terms(
+        &latest_overlay_entries(state, paper_id, lang).await,
+    ))
+}
+
+/// 使用者在「檢查譯文」改、刪這份譯本的術語：整份換掉。改了的之後的批次與重點筆記照新的用；
+/// 已翻的段落不自動重翻。這份正在翻的時候不收（翻譯工作會把它記的蓋回去）。
+#[tauri::command]
+pub async fn overlay_terms_set(
+    state: State<'_, AppState>,
+    slot: State<'_, JobSlot<JobStatus>>,
+    paper_id: String,
+    material_id: String,
+    terms: Vec<OverlayTerm>,
+) -> ApiResult<()> {
+    if slot.busy_with(&paper_id, &material_id) {
+        return Err(ApiError::new(ErrorKind::TranslateBusy, "a job is running"));
+    }
+    state
+        .lib("overlay_terms_set", move |l| {
+            let (_, token) = l.read_overlay(&paper_id, &material_id)?;
+            l.update_overlay(&paper_id, &material_id, &[], Some(&terms), &token)
+                .map(|_| ())
+        })
+        .await
+}
+
+/// 這篇在這台裝置上用過的詞元數，依服務加總（畫面照各服務的單價粗估費用）。
+#[tauri::command]
+pub async fn usage_paper(
+    state: State<'_, AppState>,
+    paper_id: String,
+) -> ApiResult<Vec<ServiceUsage>> {
+    let log: UsageLog = state.read_side(USAGE_FILE);
+    Ok(log.for_paper(&paper_id))
+}
+
+/// 一份工作的用量：一批一批記進 `usage.json`（同一份工作加到同一筆），也放進畫面看的狀態。
+pub(crate) struct UsageMeter {
+    job: String,
+    paper: String,
+    kind: &'static str,
+    service: String,
+    flushed: TokenUsage,
+}
+
+impl UsageMeter {
+    pub(crate) fn new(paper: &str, kind: &'static str, service: &str) -> UsageMeter {
+        UsageMeter {
+            job: new_id(kind, |_| false),
+            paper: paper.to_string(),
+            kind,
+            service: service.to_string(),
+            flushed: TokenUsage::default(),
+        }
+    }
+
+    /// 把引擎到現在多出來的用量記下（寫不成只記一行，不擋翻譯）。交回到現在的總數。
+    pub(crate) fn flush(&mut self, state: &AppState, engine: &Engine) -> TokenUsage {
+        let now = engine.usage();
+        let d = now.since(self.flushed);
+        if d != TokenUsage::default() {
+            let (job, paper, kind, service) = (&self.job, &self.paper, self.kind, &self.service);
+            match state.update_side(USAGE_FILE, |log: &mut UsageLog| {
+                log.add(job, paper, kind, service, d)
+            }) {
+                Ok(()) => self.flushed = now,
+                Err(e) => {
+                    let _ = e.log("usage_record");
+                }
+            }
+        }
+        now
+    }
+}
+
+/// 新增一個服務（預設啟用），交回它的代號。
+#[tauri::command]
+pub async fn translate_service_add(
+    state: State<'_, AppState>,
+    provider: Provider,
+) -> ApiResult<String> {
+    state
+        .run("translate_service_add", move |s| {
+            let mut id = String::new();
+            s.update_translate(|t| {
+                id = new_id(provider.key(), |c| t.service(c).is_some());
+                t.services.push(Service::default_for(&id, provider));
+                Ok(())
+            })?;
+            Ok(id)
+        })
+        .await
+}
+
+/// 存一個服務（依代號取代）。引擎種類不能改：要換引擎就新增一個。
+#[tauri::command]
+pub async fn translate_service_save(state: State<'_, AppState>, service: Service) -> ApiResult<()> {
+    state
+        .run("translate_service_save", move |s| {
+            s.update_translate(|t| {
+                let slot = t
+                    .services
+                    .iter_mut()
+                    .find(|x| x.id == service.id)
+                    .ok_or_else(|| ApiError::new(ErrorKind::NotFound, "service"))?;
+                if slot.provider != service.provider {
+                    return Err(ApiError::new(ErrorKind::InvalidInput, "engine kind"));
+                }
+                *slot = service;
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await
+}
+
+/// 還原預設：名稱、模型、網址、速率回到引擎的預設（金鑰與開關不動）。
+#[tauri::command]
+pub async fn translate_service_reset(state: State<'_, AppState>, id: String) -> ApiResult<()> {
+    state
+        .run("translate_service_reset", move |s| {
+            s.update_translate(|t| {
+                let slot = t
+                    .services
+                    .iter_mut()
+                    .find(|x| x.id == id)
+                    .ok_or_else(|| ApiError::new(ErrorKind::NotFound, "service"))?;
+                *slot = Service {
+                    enabled: slot.enabled,
+                    ..Service::default_for(&slot.id, slot.provider)
+                };
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await
+}
+
+/// 刪除一個服務與它的金鑰。主要服務被刪時，改由第一個還啟用的服務當主要服務。
+#[tauri::command]
+pub async fn translate_service_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> ApiResult<()> {
+    let gone = id.clone();
+    state
+        .run("translate_service_delete", move |s| {
+            s.update_translate(|t| {
+                if t.services.len() <= 1 {
+                    return Err(ApiError::new(ErrorKind::InvalidInput, "last service"));
+                }
+                t.services.retain(|x| x.id != gone);
+                t.fallbacks.retain(|f| f != &gone);
+                if t.primary == gone {
+                    t.primary = t
+                        .services
+                        .iter()
+                        .find(|x| x.enabled)
+                        .unwrap_or(&t.services[0])
+                        .id
+                        .clone();
+                    let p = t.primary.clone();
+                    t.fallbacks.retain(|f| f != &p);
+                }
+                Ok(())
+            })
+            .map(|_| ())
+        })
+        .await?;
+    // 金鑰刪不掉（例如電腦上本來就沒有）不擋刪除
+    let _ = app.paperreader().secret_delete(&id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn translate_key_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    key: String,
+) -> ApiResult<()> {
+    let key = key.trim().to_string();
+    if key.is_empty() || key.chars().count() > 500 {
+        return Err(ApiError::new(ErrorKind::InvalidInput, "key"));
+    }
+    if state.translate_settings().service(&service).is_none() {
+        return Err(ApiError::new(ErrorKind::NotFound, "service"));
+    }
+    app.paperreader()
+        .secret_set(&service, &key)
+        .await
+        .map_err(|e| ApiError::from(e).log("translate_key_set"))
+}
+
+#[tauri::command]
+pub async fn translate_key_clear(app: AppHandle, service: String) -> ApiResult<()> {
+    app.paperreader()
+        .secret_delete(&service)
+        .await
+        .map_err(|e| ApiError::from(e).log("translate_key_clear"))
+}
+
+// ---------- 引擎 ----------
+
+pub(crate) fn find_service(t: &TranslateSettings, id: &str) -> ApiResult<Service> {
+    t.service(id)
+        .cloned()
+        .ok_or_else(|| ApiError::new(ErrorKind::NotFound, "service"))
+}
+
+/// 一個服務的引擎設定。缺金鑰、缺模型時回報 `TranslateConfig`。
+async fn engine_config(app: &AppHandle, s: &Service) -> ApiResult<EngineConfig> {
+    let (model, endpoint) = s.model_endpoint();
+    let key = app
+        .paperreader()
+        .secret_get(&s.id)
+        .await
+        .map_err(|e| ApiError::from(e).log("secret_get"))?
+        .unwrap_or_default();
+    if key.is_empty() && s.provider.info().key == Need::Required {
+        return Err(ApiError::new(ErrorKind::TranslateConfig, "no API key"));
+    }
+    Ok(EngineConfig {
+        provider: s.provider,
+        model,
+        endpoint,
+        api_key: key,
+    })
+}
+
+/// 裝置上的引擎（Firefox 翻譯）：先確認模型已經下載（沒下載就說明，不要開始了才一段一段失敗）。
+async fn device_engine(
+    app: &AppHandle,
+    provider: Provider,
+    target_lang: &str,
+) -> ApiResult<Engine> {
+    let pair = ondevice::bergamot_pair(Some("en"), target_lang)
+        .ok_or_else(|| ApiError::new(ErrorKind::TranslateLanguage, "unsupported language"))?;
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| ApiError::new(ErrorKind::Io, "app data dir"))?;
+    if !ondevice::bergamot_ready(&data, pair) {
+        return Err(ApiError::new(
+            ErrorKind::TranslateNoModel,
+            "model not downloaded",
+        ));
+    }
+    let bridge = app.state::<Arc<Bridge>>().inner().clone();
+    Engine::on_device(provider, Arc::new(BergamotDevice { bridge }))
+        .map_err(|e| ApiError::new(api_kind(e.kind), "engine").log("translate_engine"))
+}
+
+/// 全部引擎的申報：要填什麼、會不會送出裝置、批次、支援的目標語言。
+/// 畫面照它顯示欄位、過濾目標語言、決定送出前要不要詢問。
+#[tauri::command]
+pub async fn translate_engines() -> ApiResult<Vec<paperreader_translate::EngineInfo>> {
+    Ok(paperreader_translate::engines())
+}
+
+/// 一個服務的引擎（照它的速率）。
+pub(crate) async fn engine_for(
+    app: &AppHandle,
+    s: &Service,
+    target_lang: &str,
+) -> ApiResult<Engine> {
+    if s.provider.info().target(target_lang).is_none() {
+        return Err(ApiError::new(
+            ErrorKind::TranslateLanguage,
+            "unsupported language",
+        ));
+    }
+    if s.provider.is_on_device() {
+        return device_engine(app, s.provider, target_lang).await;
+    }
+    let cfg = engine_config(app, s).await?;
+    Engine::new(&cfg)
+        .map(|e| e.with_rate(s.rpm))
+        .map_err(|e| ApiError::new(api_kind(e.kind), "engine").log("translate_engine"))
+}
+
+/// 使用者的術語庫（原文詞 → 譯法），翻譯與重點筆記共用。
+pub(crate) fn user_glossary(state: &AppState) -> Vec<(String, String)> {
+    state
+        .glossary()
+        .into_iter()
+        .map(|g| (g.source, g.target))
+        .collect()
+}
+
+/// 一次翻譯共同的參數：語言、選用的提示詞、術語庫、潤飾。
+fn params_for(
+    state: &AppState,
+    t: &TranslateSettings,
+    source_lang: Option<String>,
+    target_lang: String,
+    title: Option<String>,
+) -> Params {
+    Params {
+        source_lang,
+        target_lang,
+        glossary: user_glossary(state),
+        instructions: t.prompt_text(),
+        title,
+        refine: t.refine,
+    }
+}
+
+/// 測試服務時送出的句子（畫面把送出與收到的並排列出）。
+const TEST_SENTENCE: &str = "The model is trained on a large corpus.";
+
+/// 測試一個服務的結果：送出什麼、收到什麼、用哪個模型、花了多久。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestResult {
+    pub sent: String,
+    pub received: String,
+    /// 對話模型的名稱；機器翻譯與離線引擎是空的（畫面改寫引擎的名稱）。
+    pub model: String,
+    pub ms: u64,
+}
+
+/// 測試一個服務：翻一句短句。金鑰不對、連不上、模型名稱不對都會在這裡看到。
+#[tauri::command]
+pub async fn translate_test(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+) -> ApiResult<TestResult> {
+    let t = state.translate_settings();
+    let s = find_service(&t, &service)?;
+    let engine = engine_for(&app, &s, &t.target_lang)
+        .await?
+        .with_retry(Duration::from_millis(500), 2);
+    let params = Params {
+        refine: false,
+        ..params_for(&state, &t, Some("en".into()), t.target_lang.clone(), None)
+    };
+    let seg = Segment {
+        id: "1".to_string(),
+        text: TEST_SENTENCE.to_string(),
+        before: None,
+    };
+    let started = std::time::Instant::now();
+    let mut out = engine
+        .translate_batch(&params, std::slice::from_ref(&seg), &Cancel::new())
+        .await
+        .map_err(|e| ApiError::new(api_kind(e.kind), "test").log("translate_test"))?;
+    Ok(TestResult {
+        sent: TEST_SENTENCE.to_string(),
+        received: out.pop().unwrap_or_default(),
+        model: if s.provider.is_chat_model() {
+            s.model_endpoint().0
+        } else {
+            String::new()
+        },
+        ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+// ---------- 譯本與翻譯工作 ----------
+
+/// 畫面抽好的一段（版面與原文）。
+#[derive(Deserialize)]
+pub struct SegmentInput {
+    pub page: u32,
+    pub bbox: [f64; 4],
+    pub kind: String,
+    pub size: Option<f64>,
+    pub source: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayCreated {
+    pub material_id: String,
+}
+
+/// 建立一份譯本（版面紀錄，每段待翻）。語言用目前的設定，記下要用的服務的引擎與模型。
+#[tauri::command]
+pub async fn overlay_create(
+    state: State<'_, AppState>,
+    paper_id: String,
+    source_material: String,
+    segments: Vec<SegmentInput>,
+    service: String,
+) -> ApiResult<OverlayCreated> {
+    let t = state.translate_settings();
+    let svc = find_service(&t, &service)?;
+    if svc.provider.info().target(&t.target_lang).is_none() {
+        return Err(ApiError::new(
+            ErrorKind::TranslateLanguage,
+            "unsupported language",
+        ));
+    }
+    let (model, _) = svc.model_endpoint();
+    // 這篇最新那份同語言譯本裡使用者的決定（改的、刪的術語）帶到新的一份
+    let inherit = inherited_terms(&latest_overlay_entries(&state, &paper_id, &t.target_lang).await);
+    state
+        .run("overlay_create", move |s| {
+            let draft = OverlayDraft {
+                source_material,
+                provider: svc.provider.key().to_string(),
+                model: if svc.provider.is_chat_model() {
+                    model
+                } else {
+                    String::new()
+                },
+                source_lang: Some(t.source_lang.clone()).filter(|l| !l.is_empty()),
+                target_lang: t.target_lang.clone(),
+                segments: segments
+                    .into_iter()
+                    .map(|g| SegmentDraft {
+                        page: g.page,
+                        bbox: g.bbox,
+                        kind: g.kind,
+                        size: g.size,
+                        source: g.source,
+                    })
+                    .collect(),
+            };
+            s.with_lib(|l| {
+                let (_, token) = l.get_paper(&paper_id)?;
+                let c = l.create_overlay(&paper_id, draft, &token)?;
+                if !inherit.is_empty() {
+                    // 帶不過去不擋建立：只是從空的開始
+                    let _ = l.update_overlay(
+                        &paper_id,
+                        &c.material_id,
+                        &[],
+                        Some(&inherit),
+                        &c.overlay_token,
+                    );
+                }
+                Ok(OverlayCreated {
+                    material_id: c.material_id,
+                })
+            })
+        })
+        .await
+}
+
+/// 讀一份譯本的全部內容（版面、原文、譯文、狀態）。
+#[tauri::command]
+pub async fn overlay_read(
+    state: State<'_, AppState>,
+    paper_id: String,
+    material_id: String,
+) -> ApiResult<OverlayFile> {
+    state
+        .lib("overlay_read", move |l| {
+            l.read_overlay(&paper_id, &material_id).map(|(d, _)| d)
+        })
+        .await
+}
+
+/// 讀譯本與篇名（`command` 是記錄用的指令名稱）。
+async fn read_doc(
+    state: &AppState,
+    command: &'static str,
+    paper_id: &str,
+    material_id: &str,
+) -> ApiResult<(OverlayFile, Option<String>)> {
+    let (pid, mid) = (paper_id.to_string(), material_id.to_string());
+    state
+        .lib(command, move |l| {
+            let (doc, _) = l.read_overlay(&pid, &mid)?;
+            let (paper, _) = l.get_paper(&pid)?;
+            Ok((doc, paper.bib.title.filter(|t| !t.trim().is_empty())))
+        })
+        .await
+}
+
+/// 停下來時讓畫面問的「改用下一個服務」：`next` 是依序的下一個（翻譯與重點筆記各有各的挑法）。
+pub(crate) async fn fallback_offer(
+    app: &AppHandle,
+    next: Option<Service>,
+) -> Option<FallbackOffer> {
+    let next = next?;
+    Some(FallbackOffer {
+        host: host_of(app, &next).await,
+        id: next.id,
+        name: next.name,
+        provider: next.provider,
+    })
+}
+
+/// 開始（或接著）翻：只翻還沒翻好的段落，用 `service` 這個服務。背景進行，立刻交回；
+/// 進度用 `translate_status` 問。服務連不上、額度用完、一直被限速而停下時，狀態裡帶著依序的
+/// 下一個服務，畫面先問使用者，同意了再用那個服務呼叫這裡接著翻。
+/// 原地更新同一份譯本：只送還沒翻好的段落（`pending`、`failed`），已翻的（含使用者決定的）
+/// 不動；這一輪翻不出來的段落，原本是已翻的就不寫（留著舊的譯文）。整篇重翻是另做一份新的譯本（畫面先建一份
+/// 新的疊加檔再呼叫這裡）。
+#[tauri::command]
+pub async fn translate_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    slot: State<'_, JobSlot<JobStatus>>,
+    paper_id: String,
+    material_id: String,
+    service: String,
+) -> ApiResult<()> {
+    let blank = |paper_id: &str, material_id: &str| JobStatus {
+        paper_id: paper_id.to_string(),
+        material_id: material_id.to_string(),
+        service: service.clone(),
+        total: 0,
+        done: 0,
+        failed: 0,
+        state: JobState::Running,
+        reason: None,
+        fallback: None,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    // 先占位（檢查「已有工作」與登記在同一把鎖裡），後面任何一步失敗再還原
+    let cancel = Cancel::new();
+    let previous = slot.begin(Job {
+        cancel: cancel.clone(),
+        status: blank(&paper_id, &material_id),
+        extra: (),
+    })?;
+    let t = state.translate_settings();
+    let prepared = async {
+        let svc = find_service(&t, &service)?;
+        let (doc, title) = read_doc(&state, "translate_run", &paper_id, &material_id).await?;
+        let engine = engine_for(&app, &svc, &doc.target_lang).await?;
+        Ok::<_, ApiError>((engine, doc, title, segment_service(&svc)))
+    }
+    .await;
+    let (engine, doc, title, by) = match prepared {
+        Ok(v) => v,
+        Err(e) => {
+            slot.restore(previous);
+            return Err(e);
+        }
+    };
+    // 這份譯本記的術語（在譯文疊加檔裡）：接著翻沿用，使用者在「檢查譯文」改的照新的用
+    let old_terms = doc.terms.clone();
+    let engine = engine.with_paper_terms(to_paper_terms(&old_terms));
+    let mut meter = UsageMeter::new(&paper_id, "translation", &service);
+    let total = doc.segments.len();
+    let done0 = doc
+        .segments
+        .iter()
+        .filter(|g| !needs_translation(g))
+        .count();
+    // 已翻的段落：這一輪翻不出來也不寫
+    let done_before: std::collections::HashSet<String> = doc
+        .segments
+        .iter()
+        .filter(|g| g.status == STATUS_DONE)
+        .map(|g| g.id.clone())
+        .collect();
+    // 前一段的原文當前後文（不管前一段翻了沒有）
+    let pending: Vec<Segment> = doc
+        .segments
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| needs_translation(g))
+        .map(|(i, g)| Segment {
+            id: g.id.clone(),
+            text: g.source.clone(),
+            before: i
+                .checked_sub(1)
+                .map(|p| doc.segments[p].source.chars().take(400).collect()),
+        })
+        .collect();
+    let params = params_for(
+        &state,
+        &t,
+        doc.source_lang.clone(),
+        doc.target_lang.clone(),
+        title,
+    );
+
+    let mut status = JobStatus {
+        total,
+        done: done0,
+        ..blank(&paper_id, &material_id)
+    };
+    let publish =
+        |slot: &JobSlot<JobStatus>, st: &JobStatus| slot.publish(|j| j.status = st.clone());
+    publish(&slot, &status);
+
+    let slot = slot.inner().clone();
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let mut written = engine.paper_terms();
+        let summary = run_job(&engine, &params, pending, &cancel, |ev| {
+            // 用量：一批一批記下（中途停下也留著）
+            let used = meter.flush(&state, &engine);
+            status.input_tokens = used.input;
+            status.output_tokens = used.output;
+            // 這份譯本的術語變了：和這一批的段落同一次寫進疊加檔
+            let now = engine.paper_terms();
+            // 術語不合規則時只寫段落、記一行：不能讓付過費的譯文因為術語寫不進去
+            let terms = (now != written)
+                .then(|| to_overlay_terms(&now, &old_terms))
+                .filter(|t| match paperreader_core::overlay::validate_terms(t) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("paperreader: paper_terms skipped: {}", e.kind_name());
+                        false
+                    }
+                });
+            let updates = batch_updates(&ev.items, &done_before, &by);
+            let wrote = if updates.is_empty() && terms.is_none() {
+                Ok(())
+            } else {
+                state
+                    .with_lib(|l| {
+                        let (_, token) = l.read_overlay(&paper_id, &material_id)?;
+                        l.update_overlay(
+                            &paper_id,
+                            &material_id,
+                            &updates,
+                            terms.as_deref(),
+                            &token,
+                        )
+                    })
+                    .map(|_| ())
+            };
+            if wrote.is_ok() && terms.is_some() {
+                written = now;
+            }
+            if wrote.is_err() {
+                return false;
+            }
+            for it in &ev.items {
+                match it.result {
+                    Ok(_) => status.done += 1,
+                    Err(_) => status.failed += 1,
+                }
+            }
+            publish(&slot, &status);
+            true
+        })
+        .await;
+        // 最後一批之後還有用量（讀不懂而縮小批次再試、停下前的那一次）
+        let used = meter.flush(&state, &engine);
+        status.input_tokens = used.input;
+        status.output_tokens = used.output;
+        status.state = if summary.cancelled {
+            JobState::Cancelled
+        } else if summary.stopped.is_some() || summary.sink_failed {
+            JobState::Stopped
+        } else {
+            JobState::Finished
+        };
+        status.reason = if summary.sink_failed {
+            Some(ErrorKind::Io)
+        } else {
+            summary.stopped.map(api_kind)
+        };
+        // 服務停擺（不是金鑰或設定的問題）：找依序的下一個服務，讓畫面問使用者要不要換
+        if summary.stopped.is_some_and(offers_fallback) {
+            let next = state
+                .translate_settings()
+                .next_fallback(&status.service)
+                .cloned();
+            status.fallback = fallback_offer(&app, next).await;
+        }
+        publish(&slot, &status);
+    });
+    Ok(())
+}
+
+/// 目前（或最近一次）翻譯工作的狀態；從沒有過就是 `null`。
+#[tauri::command]
+pub async fn translate_status(slot: State<'_, JobSlot<JobStatus>>) -> ApiResult<Option<JobStatus>> {
+    Ok(slot.status())
+}
+
+#[tauri::command]
+pub async fn translate_cancel(slot: State<'_, JobSlot<JobStatus>>) -> ApiResult<()> {
+    slot.cancel();
+    Ok(())
+}
+
+// ---------- 並排比較與套用 ----------
+
+/// 一個服務對選的那幾段交回的譯文。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareColumn {
+    pub service: String,
+    /// 和要求的段落一一對應；翻不出來的是 `null`。
+    pub texts: Vec<Option<String>>,
+    /// 整個服務都沒翻成時的原因。
+    pub error: Option<ErrorKind>,
+}
+
+/// 讓幾個服務（最多 3 個）各翻一次選的段落，並排比較。不寫進譯本：使用者挑了再用 `overlay_apply` 套用。
+#[tauri::command]
+pub async fn translate_compare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    slot: State<'_, JobSlot<JobStatus>>,
+    paper_id: String,
+    material_id: String,
+    segment_ids: Vec<String>,
+    services: Vec<String>,
+) -> ApiResult<Vec<CompareColumn>> {
+    if services.is_empty()
+        || services.len() > 3
+        || segment_ids.is_empty()
+        || segment_ids.len() > 200
+    {
+        return Err(ApiError::new(ErrorKind::InvalidInput, "compare"));
+    }
+    if slot.busy_with(&paper_id, &material_id) {
+        return Err(ApiError::new(ErrorKind::TranslateBusy, "a job is running"));
+    }
+    let t = state.translate_settings();
+    let (doc, title) = read_doc(&state, "translate_compare", &paper_id, &material_id).await?;
+    let segs: Vec<Segment> = segment_ids
+        .iter()
+        .filter_map(|id| {
+            let i = doc.segments.iter().position(|g| &g.id == id)?;
+            Some(Segment {
+                id: id.clone(),
+                text: doc.segments[i].source.clone(),
+                before: i
+                    .checked_sub(1)
+                    .map(|p| doc.segments[p].source.chars().take(400).collect()),
+            })
+        })
+        .collect();
+    let params = Params {
+        refine: false,
+        ..params_for(
+            &state,
+            &t,
+            doc.source_lang.clone(),
+            doc.target_lang.clone(),
+            title,
+        )
+    };
+    let mut tasks = Vec::new();
+    for id in services {
+        let app = app.clone();
+        let svc = find_service(&t, &id)?;
+        let (segs, params, ids) = (segs.clone(), params.clone(), segment_ids.clone());
+        tasks.push(tauri::async_runtime::spawn(async move {
+            let engine = match engine_for(&app, &svc, &params.target_lang).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return CompareColumn {
+                        service: svc.id,
+                        texts: vec![None; ids.len()],
+                        error: Some(e.kind),
+                    };
+                }
+            };
+            let mut got: Vec<(String, String)> = Vec::new();
+            let sum = run_job(&engine, &params, segs, &Cancel::new(), |ev| {
+                got.extend(
+                    ev.items
+                        .into_iter()
+                        .filter_map(|i| i.result.ok().map(|t| (i.id, t))),
+                );
+                true
+            })
+            .await;
+            CompareColumn {
+                service: svc.id,
+                texts: ids
+                    .iter()
+                    .map(|id| got.iter().find(|(g, _)| g == id).map(|(_, t)| t.clone()))
+                    .collect(),
+                error: summary_error(&sum),
+            }
+        }));
+    }
+    let mut out = Vec::new();
+    for task in tasks {
+        out.push(
+            task.await
+                .map_err(|_| ApiError::new(ErrorKind::Io, "compare task"))?,
+        );
+    }
+    Ok(out)
+}
+
+fn summary_error(sum: &paperreader_translate::JobSummary) -> Option<ErrorKind> {
+    sum.stopped.map(api_kind)
+}
+
+/// 這一段要不要送翻：只有還沒翻好的（`pending`、`failed`）。已翻的、使用者決定的都不送。
+fn needs_translation(g: &OverlaySegment) -> bool {
+    g.status != STATUS_DONE
+}
+
+/// 一批翻譯結果要寫進譯本的更新。翻出來的寫成已翻、記服務；翻不出來的寫成 `failed`，但這一輪開始時
+/// 已翻的段落（`done_before`）不寫，原本的譯文留著。
+fn batch_updates(
+    items: &[paperreader_translate::BatchItem],
+    done_before: &std::collections::HashSet<String>,
+    by: &SegmentService,
+) -> Vec<SegmentUpdate> {
+    items
+        .iter()
+        .filter_map(|it| match &it.result {
+            Err(_) if done_before.contains(&it.id) => None,
+            Ok(text) => Some(SegmentUpdate {
+                id: it.id.clone(),
+                status: STATUS_DONE.to_string(),
+                target: Some(text.clone()),
+                error: None,
+                issues: paperreader_translate::check::issue_codes(&it.issues),
+                service: Some(by.clone()),
+                by_user: false,
+            }),
+            Err(kind) => Some(SegmentUpdate {
+                id: it.id.clone(),
+                status: STATUS_FAILED.to_string(),
+                target: None,
+                error: Some(format!("{kind:?}")),
+                issues: Vec::new(),
+                service: Some(by.clone()),
+                by_user: false,
+            }),
+        })
+        .collect()
+}
+
+/// 記在每一段上的服務：代號、引擎種類、模型（對話模型以外是空字串，同譯本檔頭的 `model`）。
+fn segment_service(svc: &Service) -> SegmentService {
+    let (model, _) = svc.model_endpoint();
+    SegmentService {
+        id: svc.id.clone(),
+        provider: svc.provider.key().to_string(),
+        model: if svc.provider.is_chat_model() {
+            model
+        } else {
+            String::new()
+        },
+        extra: Default::default(),
+    }
+}
+
+/// 把一段譯文套用到譯本（並排比較時挑的那一個）。重新跑自動檢查。`service` 是翻出這段的服務的代號：
+/// 找得到就記在那一段上；已經不在設定裡時不記。
+#[tauri::command]
+pub async fn overlay_apply(
+    state: State<'_, AppState>,
+    slot: State<'_, JobSlot<JobStatus>>,
+    paper_id: String,
+    material_id: String,
+    segment_id: String,
+    text: String,
+    service: Option<String>,
+) -> ApiResult<()> {
+    if text.trim().is_empty() || text.chars().count() > 20_000 {
+        return Err(ApiError::new(ErrorKind::InvalidInput, "text"));
+    }
+    if slot.busy_with(&paper_id, &material_id) {
+        return Err(ApiError::new(ErrorKind::TranslateBusy, "a job is running"));
+    }
+    let by = service.and_then(|id| {
+        let t = state.translate_settings();
+        t.service(&id).map(segment_service)
+    });
+    state
+        .lib("overlay_apply", move |l| {
+            let (doc, token) = l.read_overlay(&paper_id, &material_id)?;
+            let source = doc
+                .segments
+                .iter()
+                .find(|g| g.id == segment_id)
+                .map(|g| g.source.clone())
+                .unwrap_or_default();
+            let issues =
+                paperreader_translate::check::check_segment(&source, &text, &doc.target_lang);
+            let update = SegmentUpdate {
+                id: segment_id,
+                status: STATUS_DONE.to_string(),
+                target: Some(text),
+                error: None,
+                issues: paperreader_translate::check::issue_codes(&issues),
+                service: by,
+                // 使用者挑的：之後任何整批的翻譯都不蓋掉
+                by_user: true,
+            };
+            l.update_overlay_segments(&paper_id, &material_id, &[update], &token)
+                .map(|_| ())
+        })
+        .await
+}
+
+// ---------- 術語庫 ----------
+
+const GLOSSARY_MAX: usize = 5000;
+
+fn check_terms(terms: &[Term]) -> ApiResult<()> {
+    let bad = || ApiError::new(ErrorKind::InvalidInput, "glossary");
+    if terms.len() > GLOSSARY_MAX {
+        return Err(bad());
+    }
+    for t in terms {
+        if t.source.trim().is_empty()
+            || t.target.trim().is_empty()
+            || t.source.chars().count() > 200
+            || t.target.chars().count() > 200
+            || t.note.chars().count() > 500
+        {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn glossary_get(state: State<'_, AppState>) -> ApiResult<Vec<Term>> {
+    state.run("glossary_get", |s| Ok(s.glossary())).await
+}
+
+#[tauri::command]
+pub async fn glossary_set(state: State<'_, AppState>, terms: Vec<Term>) -> ApiResult<()> {
+    check_terms(&terms)?;
+    state
+        .run("glossary_set", move |s| s.set_glossary(&terms))
+        .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlossaryImport {
+    pub cancelled: bool,
+    /// 新加的條數。
+    pub added: usize,
+    /// 原文詞已經有、改成檔案裡的譯法的條數。
+    pub updated: usize,
+    /// 讀不出原文或譯法而略過的行數。
+    pub skipped: usize,
+}
+
+/// 從使用者選的三欄 TSV 檔匯入術語：原文詞相同的取代，其餘加在後面。
+#[tauri::command]
+pub async fn glossary_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> ApiResult<GlossaryImport> {
+    let picked = app.paperreader().pick_any_file().await?;
+    let Some(path) = picked.into_iter().next().and_then(|p| p.path) else {
+        return Ok(GlossaryImport {
+            cancelled: true,
+            added: 0,
+            updated: 0,
+            skipped: 0,
+        });
+    };
+    state
+        .run("glossary_import", move |s| {
+            let file = std::path::PathBuf::from(&path);
+            let bytes =
+                std::fs::read(&file).map_err(|e| paperreader_core::error::io_error(&file, e));
+            let _ = std::fs::remove_file(&file);
+            let text = String::from_utf8(bytes?)
+                .map_err(|_| ApiError::new(ErrorKind::Unreadable, "not utf-8"))?;
+            let parsed = glossary::parse_tsv(&text);
+            if parsed.terms.is_empty() {
+                return Err(ApiError::new(ErrorKind::Unreadable, "no terms"));
+            }
+            let mut list = s.glossary();
+            let (mut added, mut updated) = (0, 0);
+            for t in parsed.terms {
+                if glossary::merge(&mut list, t) {
+                    updated += 1;
+                } else {
+                    added += 1;
+                }
+            }
+            check_terms(&list)?;
+            s.set_glossary(&list)?;
+            Ok(GlossaryImport {
+                cancelled: false,
+                added,
+                updated,
+                skipped: parsed.skipped,
+            })
+        })
+        .await
+}
+
+/// 術語庫寫成三欄 TSV（畫面接著用匯出的流程存檔或分享）。
+#[tauri::command]
+pub async fn glossary_tsv(state: State<'_, AppState>) -> ApiResult<String> {
+    state
+        .run("glossary_tsv", |s| Ok(glossary::to_tsv(&s.glossary())))
+        .await
+}
+
+// ---------- 匯出給翻譯軟體 ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterchangeFile {
+    pub name: String,
+    pub text: String,
+}
+
+/// 逐段對照寫成 XLIFF 2.1 或 TMX 1.4b（`format`：`xliff`、`tmx`）。狀態只在這裡對到標準的狀態值。
+#[tauri::command]
+pub async fn overlay_interchange(
+    state: State<'_, AppState>,
+    paper_id: String,
+    material_id: String,
+    format: Format,
+) -> ApiResult<InterchangeFile> {
+    let (doc, title) = read_doc(&state, "overlay_interchange", &paper_id, &material_id).await?;
+    let title = title.unwrap_or_else(|| "paper".to_string());
+    let text = match format {
+        Format::Xliff => interchange::xliff(&doc, &title, &material_id),
+        Format::Tmx => interchange::tmx(&doc),
+    };
+    Ok(InterchangeFile {
+        name: interchange::file_name(&title, format),
+        text,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn service_ids_of_converted_settings_are_valid_secret_names() {
+        // 服務代號就是金鑰的檔名（外掛那邊的規則是 `^[a-z0-9_]{1,40}$`）
+        for p in paperreader_translate::Provider::ALL {
+            assert!(crate::translate::valid_id(p.key()));
+        }
+    }
+
+    fn seg(status: &str, modified: Option<&str>) -> super::OverlaySegment {
+        super::OverlaySegment {
+            id: "g0001".into(),
+            page: 0,
+            bbox: [1.0, 1.0, 2.0, 2.0],
+            kind: String::new(),
+            size: None,
+            source: "s".into(),
+            target: (status == "done").then(|| "t".into()),
+            status: status.into(),
+            error: None,
+            issues: vec![],
+            modified: modified.map(String::from),
+            modified_by: None,
+            service: None,
+            by_user: false,
+            extra: Default::default(),
+        }
+    }
+
+    /// 接著翻只送還沒翻好的段落；已翻的（含使用者決定的）不送。
+    #[test]
+    fn only_unfinished_segments_are_sent() {
+        use super::needs_translation;
+        assert!(needs_translation(&seg("pending", None)));
+        assert!(needs_translation(&seg(
+            "failed",
+            Some("2020-01-01T09:00:00.000Z")
+        )));
+        assert!(!needs_translation(&seg("done", None)));
+        let mut chosen = seg("done", Some("2020-01-01T07:00:00.000Z"));
+        chosen.by_user = true;
+        assert!(!needs_translation(&chosen));
+    }
+
+    fn ot(source: &str, target: &str, state: &str) -> super::OverlayTerm {
+        super::OverlayTerm {
+            source: source.into(),
+            target: target.into(),
+            state: state.into(),
+            batches: 2,
+            extra: Default::default(),
+        }
+    }
+
+    /// 術語記在譯文疊加檔裡；疊加檔與引擎之間來回不丟東西，不認得的欄位與狀態留著。
+    #[test]
+    fn overlay_terms_round_trip_through_the_engine_form() {
+        use super::{to_overlay_terms, to_paper_terms};
+        let mut first = ot("token", "詞元", "learned");
+        first.extra.insert("later".into(), serde_json::json!(1));
+        let old = vec![
+            first,
+            ot("policy", "策略", "user"),
+            ot("state", "", "removed"),
+            ot("gain", "增益", "candidate"),
+            ot("odd", "怪", "from_a_newer_version"),
+        ];
+        let engine_form = to_paper_terms(&old);
+        assert_eq!(engine_form.len(), 4, "an unknown state is not used");
+        let back = to_overlay_terms(&engine_form, &old);
+        assert_eq!(back, old);
+        assert!(paperreader_core::overlay::validate_terms(&back).is_ok());
+    }
+
+    /// 引擎學到的術語不管模型怎麼提，寫進疊加檔前都合核心的規則（一個詞一條）：不合就整批寫不進去、付過費的譯文沒存。
+    #[test]
+    fn learned_terms_always_fit_the_overlay_rules() {
+        use paperreader_translate::learn_terms;
+        let p = |s: &str, t: &str| (s.to_string(), t.to_string());
+        let mut known = Vec::new();
+        let src = ["The token, the Token and the stretch."];
+        let out = ["權杖、符記、詞元、伸展、拉伸"];
+        for found in [
+            vec![p("token", "權杖"), p("Token", "符記"), p("stretch", "伸展")],
+            vec![p("token", "詞元"), p("stretch", "拉伸")],
+            vec![p("TOKEN", "詞元"), p("stretch", "伸展")],
+        ] {
+            learn_terms(&mut known, found, &src, &out, &[]);
+            let overlay = super::to_overlay_terms(&known, &[]);
+            assert!(
+                paperreader_core::overlay::validate_terms(&overlay).is_ok(),
+                "{overlay:?}"
+            );
+        }
+    }
+
+    /// 整篇重翻另做一份：只帶使用者的決定，學到的與候選重新來。
+    #[test]
+    fn a_new_translation_inherits_only_the_users_decisions() {
+        let old = vec![
+            ot("token", "權杖", "learned"),
+            ot("policy", "策略", "user"),
+            ot("state", "", "removed"),
+            ot("gain", "增益", "candidate"),
+        ];
+        let kept: Vec<String> = super::inherited_terms(&old)
+            .into_iter()
+            .map(|t| t.source)
+            .collect();
+        assert_eq!(kept, vec!["policy", "state"]);
+    }
+
+    /// 這一輪翻不出來的段落，原本已翻的不寫（不清掉舊的譯文）；原本沒翻好的照樣記成 failed。
+    #[test]
+    fn a_failure_does_not_wipe_a_finished_segment() {
+        use paperreader_translate::{BatchItem, ErrorKind};
+        let by = super::SegmentService {
+            id: "svc".into(),
+            provider: "deepl".into(),
+            model: String::new(),
+            extra: Default::default(),
+        };
+        let items = vec![
+            BatchItem {
+                id: "g0001".into(),
+                result: Err(ErrorKind::BadResponse),
+                issues: vec![],
+            },
+            BatchItem {
+                id: "g0002".into(),
+                result: Err(ErrorKind::BadResponse),
+                issues: vec![],
+            },
+            BatchItem {
+                id: "g0003".into(),
+                result: Ok("譯".into()),
+                issues: vec![],
+            },
+        ];
+        let done_before: std::collections::HashSet<String> = ["g0001".to_string()].into();
+        let ups = super::batch_updates(&items, &done_before, &by);
+        let ids: Vec<&str> = ups.iter().map(|u| u.id.as_str()).collect();
+        assert_eq!(ids, vec!["g0002", "g0003"], "{ups:?}");
+        assert_eq!(ups[0].status, "failed");
+        assert_eq!(ups[1].status, "done");
+        assert!(ups.iter().all(|u| !u.by_user));
+    }
+}

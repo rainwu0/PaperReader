@@ -1,0 +1,12 @@
+{
+  "說明": "npm audit 的例外。只列沒有修好的版本、而且我們的用法碰不到的通報；每則寫理由與何時再看。由 scripts/npm-audit.mjs 讀。",
+  "exceptions": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "added": "2026-11-18",
+      "reason": "ReDoS：特製的 extglob 比對樣式會讓比對卡很久。picomatch 只經 vite（以及 tinyglobby、fdir）在開發與建置時用，比對樣式來自 vite 自己與我們的設定檔，不來自使用者或網路；不進安裝檔（vite 與 @vitejs/plugin-react 都是 devDependencies）。通報時最新的 4.0.7 也受影響，沒有修好的版本。",
+      "review": "picomatch 出修好的版本、或 vite 換掉它時拿掉這一則"
+    }
+  ]
+}

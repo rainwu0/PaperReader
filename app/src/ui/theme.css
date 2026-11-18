@@ -1,0 +1,941 @@
+/* 樣式變數與共用樣式。色彩：中性灰階，墨水藍只給可以按的與選中的，琥珀色只留給劃線。
+   次要文字與邊線的顏色都算過對比：小字至少 4.5:1，圖形至少 3:1。 */
+
+:root {
+  /* 三階的底：底（--bg）、卡片（--paper）、浮起的面板（--raised，側邊欄、對話框、工具箱、選單） */
+  --bg: #f2f3f6;
+  --paper: #ffffff;
+  --raised: #ffffff;
+  /* 文字三階：主要、次要、停用（停用的不承載資訊，不受對比要求） */
+  --text: #16171b;
+  --text-2: #555862;
+  --text-3: #8a8d97;
+  --accent: #1f3d8f;
+  --on-accent: #ffffff;
+  --border: #767676; /* 輸入框、開關的邊線：對底色至少 3:1 */
+  --divider: #e1e2e7; /* 純分隔用，不承載資訊 */
+  --accent-soft: #e8edfa;
+  --reader-bg: #e9e9ec;
+  --scrim: rgba(0, 0, 0, 0.45);
+  --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.16);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --radius-card: 16px;
+  --gutter: 16px;
+  --tap: 48px;
+  --inset-top: 0px;
+  --inset-bottom: 0px;
+  --inset-left: 0px;
+  --inset-right: 0px;
+  /* 轉換的時間與 easing（Material 3 的 motion token）。`ui/motion.tsx` 用同樣的數值 */
+  --motion-short: 100ms;
+  --motion-quick: 150ms;
+  --motion-medium: 200ms;
+  --motion-long: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
+  color-scheme: light;
+}
+
+/* 深色：底不用純黑，三階的灰一階一階亮上去；主色調亮。對比（算過）：
+   主要文字對三階底 12.3–15.6、次要文字 6.3–8.0、主色 7.4–9.4、邊線 4.5–5.6 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #131418;
+    --paper: #1c1d23;
+    --raised: #272930;
+    --text: #ececf1;
+    --text-2: #a8abb6;
+    --text-3: #7a7d88;
+    --accent: #a3b8f5;
+    --on-accent: #10131d;
+    --border: #8b8e9a;
+    --divider: #2b2d35;
+    --accent-soft: #252c45;
+    --reader-bg: #0e0f12;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-card: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #131418;
+  --paper: #1c1d23;
+  --raised: #272930;
+  --text: #ececf1;
+  --text-2: #a8abb6;
+  --text-3: #7a7d88;
+  --accent: #a3b8f5;
+  --on-accent: #10131d;
+  --border: #8b8e9a;
+  --divider: #2b2d35;
+  --accent-soft: #252c45;
+  --reader-bg: #0e0f12;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-card: none;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui, -apple-system, "Noto Sans CJK TC", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  overscroll-behavior: none;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* ---------- 畫面骨架 ---------- */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-left: var(--inset-left);
+  padding-right: var(--inset-right);
+}
+
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--tap) + var(--inset-top));
+  padding: var(--inset-top) 4px 0 4px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--divider);
+}
+
+.topbar h1 {
+  flex: 1;
+  margin: 0;
+  padding: 0 8px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: calc(24px + var(--inset-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+
+.content {
+  padding: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* ---------- 按鈕 ---------- */
+
+.icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--accent);
+}
+
+.icon-btn:active,
+.btn:active,
+.row:active {
+  opacity: 0.7;
+}
+
+.icon-btn svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 20px;
+  border-radius: 24px;
+  border: 1.5px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.block {
+  display: flex;
+  width: 100%;
+}
+
+/* ---------- 文字 ---------- */
+
+.muted {
+  color: var(--text-2);
+}
+
+.small {
+  font-size: var(--fs-sm);
+}
+
+.xs {
+  font-size: var(--fs-xs);
+}
+
+/* 只給讀屏軟體念、畫面上看不到的字（例如「譯」標記的完整說法） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+h2.section {
+  margin: 24px 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+/* ---------- 列 ---------- */
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 64px;
+  padding: 0 0 0 16px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--bg);
+}
+
+/* 回收區每一列右邊的按鈕（還原、永久刪除）；分組的標題 */
+.trash-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.trash-heading {
+  padding: 0 16px;
+}
+
+/* 文獻資訊的材料清單：在內容區裡，不要左邊的列縮排 */
+.info-materials .row {
+  padding-left: 0;
+}
+
+/* 剛加入或帶到的那一列：淡墨水藍底（琥珀色只留給劃線） */
+.row.hl {
+  background: var(--accent-soft);
+}
+
+/* 閱讀狀態的圓點：未讀＝實心、讀到一半＝半實心、已讀＝圓圈加勾。用中性的文字色，不用墨水藍，
+   形狀不同所以不靠顏色就分得出 */
+.status-dot {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text);
+}
+
+.status-dot.read {
+  color: var(--text-2);
+}
+
+.status-dot .fill {
+  fill: currentColor;
+}
+
+.status-dot .ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.status-dot .tick {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 設定裡進下一頁的項目：整列可以按，右邊有 › */
+.nav-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 4px 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-md);
+}
+
+.nav-row .chev {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: var(--fs-lg);
+  padding: 0 12px;
+}
+
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  align-self: stretch;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-title {
+  display: block;
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-sub {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: none;
+  min-width: 28px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.badge.read {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.continue {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 16px;
+  padding: 16px;
+  text-align: left;
+  border: 1.5px solid var(--accent);
+  border-radius: 16px;
+  background: var(--accent-soft);
+}
+
+.continue .label {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.continue .name {
+  display: block;
+  margin: 4px 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ---------- 空狀態 ---------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 24px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.empty h2 {
+  margin: 0 0 8px;
+  font-size: var(--fs-lg);
+}
+
+.empty .btn {
+  margin-top: 16px;
+}
+
+/* ---------- 表單 ---------- */
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.input {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  font-size: var(--fs-md);
+}
+
+/* 範例文字要看得清楚：用次要文字的顏色（淺色 7.8:1、深色 6.8:1），不用瀏覽器預設的淡灰 */
+.input::placeholder {
+  color: var(--text-2);
+  opacity: 1;
+}
+
+.input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--tap);
+  padding: 4px 0;
+}
+
+.switch-row input {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  accent-color: var(--accent);
+}
+
+/* 單選清單（`ChoiceList`、`Choice`）：排序方式、書目格式 */
+.choice-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-md);
+}
+
+.choice-mark {
+  flex: none;
+  width: 24px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 有說明的一項：名稱粗一點，說明在下一行 */
+.choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+}
+
+.choice-text .muted {
+  font-weight: 400;
+}
+
+/* 單選的卡片（同步預覽的取捨、新增服務時選引擎）：選中的有粗邊與實心圓點，不只靠顏色 */
+.pick-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  min-height: var(--tap);
+  margin: 0 0 8px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--text);
+  text-align: left;
+}
+
+.pick-card[aria-checked="true"] {
+  border: 3px solid var(--accent);
+  padding: 10.5px 12.5px;
+  background: var(--accent-soft);
+}
+
+.pick-card-mark {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.pick-card[aria-checked="true"] .pick-card-mark {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 5px, var(--paper) 6px);
+}
+
+.pick-card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.pick-card-name {
+  display: block;
+  font-weight: 600;
+}
+
+.pick-card-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* 一排並列的按鈕（金鑰、離線模型、術語庫、提示詞的動作） */
+.btn-row {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.segmented {
+  display: flex;
+  border: 1.5px solid var(--accent);
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.segmented button {
+  flex: 1;
+  min-height: var(--tap);
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-md);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* ---------- 訊息、對話框、進行中 ---------- */
+
+.notice {
+  margin: 12px 16px;
+  padding: 12px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  font-size: var(--fs-sm);
+}
+
+/* ---------- 畫面的一層（App.tsx 的 ScreenLayer）---------- */
+
+/* 滿版的固定定位：轉換播放中加了位移，裡面固定定位的畫面、面板仍以整個畫面為準 */
+.layer {
+  position: fixed;
+  inset: 0;
+}
+
+/* ---------- 「詳情」展開區---------- */
+
+.details {
+  margin-top: 4px;
+}
+
+.details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.details-arrow {
+  display: inline-block;
+  font-size: var(--fs-lg);
+  line-height: 1;
+  transition: transform var(--motion-quick) var(--ease-standard);
+}
+
+.details-arrow.open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .details-arrow {
+    transition: none;
+  }
+}
+
+.details-body {
+  padding: 0 4px 8px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.details-body p,
+.details-body ul {
+  margin: 0 0 6px;
+}
+
+/* ---------- ⓘ 說明框---------- */
+
+.tip {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.tip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  margin: -12px -8px -12px -4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.tip-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.tip-catcher {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.tip-bubble {
+  position: fixed;
+  z-index: 81;
+  width: min(300px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  box-shadow: var(--shadow-raised);
+}
+
+/* ---------- 說明頁 ---------- */
+
+.help ol {
+  margin: 0 0 8px;
+  padding-left: 1.4em;
+}
+
+.help li {
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+.notice .btn {
+  margin-top: 8px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(24px + var(--inset-bottom));
+  z-index: 60;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: var(--fs-sm);
+}
+
+.check-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.nav-rows {
+  margin-top: 8px;
+  border-top: 1px solid var(--divider);
+}
+
+/* 閱讀畫面頂端的小提示（不打斷閱讀） */
+.reader-note {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: calc(var(--inset-top) + 8px);
+  z-index: 6;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.toast-text {
+  flex: 1;
+}
+
+.toast-action {
+  flex: none;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 12px;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--bg);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--scrim);
+}
+
+.sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: 20px 20px calc(20px + var(--inset-bottom));
+  border-radius: 20px 20px 0 0;
+  background: var(--raised);
+}
+
+/* 置中對話框固定寬度：文案短了也不會縮成一小塊 */
+.sheet.center {
+  border-radius: 20px;
+  margin: auto 16px;
+  width: min(560px, calc(100% - 32px));
+}
+
+.scrim.center {
+  align-items: center;
+}
+
+.sheet h2 {
+  margin: 0 0 12px;
+  font-size: var(--fs-lg);
+}
+
+/* 面板裡的檔案路徑（備份、同步、交出檔案）：很長也要折行 */
+.sheet-path {
+  overflow-wrap: anywhere;
+}
+
+.sheet .actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.busy {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--scrim);
+  color: #fff;
+  font-size: var(--fs-md);
+}
+
+/* 進行中的卡片：自己有底色，文字與轉圈的對比不受底下影響 */
+.busy-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 32px;
+  border-radius: 20px;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.spinner.dark {
+  border-color: var(--divider);
+  border-top-color: var(--accent);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+.center-fill {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+}
+
+/* 分段選擇（設定與其他地方共用）：外框用邊線色，選中的實心 */
+.segmented {
+  border-color: var(--border);
+}
+
+/* 卡片裡的欄位：底用卡片的一階之下，所以輸入框看得出邊界 */
+.set-card .input {
+  background: var(--bg);
+}
+
+.set-row-head .set-icon {
+  margin-top: 0;
+}

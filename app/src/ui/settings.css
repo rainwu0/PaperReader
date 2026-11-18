@@ -1,0 +1,225 @@
+/* settings 區的樣式：設定頁與它底下的次頁（從 theme.css 分出來）。顏色與間距用 theme.css 的變數。
+   在 theme.css 之後、home.css 之前載入（main.tsx），和搬出之前的先後一樣。 */
+
+/* ---------- 設定頁：分區標題加一張圓角卡片 ---------- */
+
+.settings .topbar {
+  border-bottom: 0;
+}
+
+.settings .topbar h1 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.set-inner {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 4px var(--gutter) 8px;
+}
+
+.set-section {
+  margin-top: 20px;
+}
+
+.set-heading {
+  margin: 0 0 8px;
+  padding: 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.set-card {
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+}
+
+.set-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 16px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+}
+
+/* 列與列之間的細線，從文字的左邊開始（圖示底下不畫） */
+.set-card > .set-row + .set-row,
+.set-card > .set-path + .set-row {
+  border-top: 1px solid var(--divider);
+}
+
+.set-row-btn:active {
+  background: var(--accent-soft);
+}
+
+.set-icon {
+  flex: none;
+  display: inline-flex;
+  margin-top: 2px;
+  width: 24px;
+  height: 24px;
+  color: var(--accent);
+}
+
+.set-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.set-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.set-title {
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.set-hint {
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.set-about {
+  margin: 0 0 12px;
+}
+
+/* 關於 → 授權全文：每一份授權檔的名稱與原文（原文照檔案的換行） */
+.license-block {
+  margin-top: 20px;
+}
+
+.license-name {
+  margin: 0 0 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.license-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.set-value,
+.set-chev,
+.set-switch {
+  align-self: center;
+}
+
+.set-row-plain {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.set-switch:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.set-value {
+  flex: none;
+  max-width: 45%;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: right;
+}
+
+.set-chev {
+  flex: none;
+  color: var(--text-2);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.set-path {
+  margin: 0;
+  padding: 0 16px 10px 54px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.set-pad {
+  padding: 16px;
+}
+
+.set-row-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.set-row-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Android 慣用的開關：滑軌加圓鈕；開著時滑軌用主色、圓鈕靠右，關著時只有邊線，所以不只靠顏色分辨 */
+.set-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 52px;
+  height: 32px;
+  margin: 0;
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 圓鈕只動 transform：關著時縮成 16px，開著時放大並右移 */
+.set-switch::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--border);
+  transform: scale(0.8);
+  transition: transform var(--motion-short) var(--ease-standard);
+}
+
+.set-switch:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.set-switch:checked::after {
+  background: var(--on-accent);
+  transform: translateX(20px) scale(1);
+}
+
+.set-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .set-switch,
+  .set-switch::after {
+    transition: none;
+  }
+}

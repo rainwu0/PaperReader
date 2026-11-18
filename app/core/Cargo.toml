@@ -1,0 +1,32 @@
+[package]
+name = "paperreader-core"
+description = "文獻庫格式與裝置本機的文獻庫接口（不依賴 Android 與 Tauri）"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+ulid = "1"
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+thiserror = "2"
+unicode-segmentation = "1"
+# 參考文獻清單的正規化（NFKC、去重音，`references.rs` 的 `fold_text`）。原本就是 lopdf 帶進來的套件。MIT OR Apache-2.0
+unicode-normalization = "0.1"
+# 備份檔與同步包只用不壓縮（`Stored`，各自檢查）；匯入清單的 zip 收 Deflate，
+# 後端用 zlib-rs（Zlib 授權，原本就在鎖定檔）。
+zip = { version = "9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# 引用格式的排版（CSL，`citation.rs`）。關掉預設的 archive（內含整批 CC BY-SA 的格式檔），只用 `csl/` 裡我們選的幾個；
+# csl-json 讓它直接吃 CSL-JSON 的條目。MIT OR Apache-2.0
+hayagriva = { version = "0.10", default-features = false, features = ["csl-json"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,45 @@
+[package]
+name = "paperreader-translate"
+description = "翻譯引擎：對話模型（多供應商）與機器翻譯服務（DeepL、Google Cloud Translation）。連網，所以不放進核心。"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# 多供應商的對話模型用戶端（Anthropic、OpenAI、Gemini、Ollama、OpenAI 相容端點）。
+# 關掉預設功能：預設的 TLS 會帶進 aws-lc 與 Android 上要 Java 配合的憑證驗證，改由下面自己建的 reqwest 用戶端接手。
+genai = { version = "0.7.5", default-features = false }
+# 機器翻譯服務（DeepL、Google）與 genai 共用同一個 HTTP 用戶端。TLS 用 rustls + ring + 內含的根憑證，
+# 不依賴系統的憑證庫，Android 與電腦上行為一致。
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "http2", "charset"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# 離線翻譯的模型檔：Mozilla 以 zstd 壓縮後放在 CDN（純 Rust 的解壓器，MIT）；下載後以 SHA-256 核對
+ruzstd = "0.9.1"
+sha2 = "0.10"
+# 版面模型：ONNX Runtime 的 Rust 繫結。原生程式庫照 `ort` 預設在建置時從 cdn.pyke.io 下載
+# pyke.io 的建置，以套件附的 SHA-256 核對；帶進的第三方組件與授權列在「關於」頁。
+# 只開用得到的功能：不要 ndarray、tracing、copy-dylibs；下載時的 TLS 用 rustls（和上面的連網同一套）。
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-31"], optional = true }
+
+[features]
+# 開了才編進版面模型的推論與 ONNX Runtime（外殼的同名功能會打開它）
+layout-model = ["dep:ort"]
+
+[[example]]
+# 電腦上量分段準確度用：讀 800×800 的 RGB 頁面圖、交回方框
+name = "layout_boxes"
+required-features = ["layout-model"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }

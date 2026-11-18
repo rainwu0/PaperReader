@@ -1,0 +1,80 @@
+/* 外掛「內文搜尋」在首頁搜尋裡的一節。顏色、字級一律用應用的變數（ui/theme.css）；命中的字粗體加底線，不用顏色。 */
+
+.ft-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ft-building {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.ft-note {
+  margin: 4px var(--gutter) 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.ft-papers {
+  padding-top: 0;
+}
+
+.ft-hits {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0 8px 0 calc(8px + 14px);
+}
+
+.ft-hit {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.ft-hit:active {
+  opacity: 0.7;
+}
+
+.ft-where {
+  display: block;
+  color: var(--text-2);
+}
+
+.ft-context {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.ft-context mark {
+  background: none;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ft-more {
+  min-height: var(--tap);
+  margin: 0 0 6px calc(8px + 14px);
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+}
+
+.ft-sentinel {
+  height: 1px;
+}

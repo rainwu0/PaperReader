@@ -1,0 +1,20 @@
+[package]
+name = "prcli"
+description = "供模擬器驗證用的命令列工具，包住 paperreader-core"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+paperreader-core = { path = "../core" }
+serde = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3"

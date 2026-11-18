@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "rules": { "react/react-in-jsx-scope": "off", "react/set-state-in-effect": "off" },
+  "plugins": ["react", "typescript"],
+  "ignorePatterns": ["dist", "public/pdfjs", "public/bergamot/bergamot-translator.js", "node_modules", "src-tauri/gen", "target"]
+}

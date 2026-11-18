@@ -1,0 +1,103 @@
+/* ---------- 重點筆記：蓋滿畫面（沿用逐段對照的外框 .compare），依區段列出每一點 ---------- */
+
+.digest-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: var(--fs-sm);
+}
+
+.digest-state.done {
+  background: transparent;
+  border: 1px solid var(--divider);
+}
+
+.digest-section {
+  margin-top: 20px;
+}
+
+.digest-heading {
+  margin: 0 0 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.digest-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.digest-point {
+  margin: 0 0 10px;
+  padding: 10px 12px 6px;
+  background: var(--paper);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+}
+
+/* 首頁搜尋的「內文」找到的那一點：閃一下（移除動畫時改成靜態的選中樣式，到下一次點按為止） */
+.digest-point.found {
+  border-color: var(--accent);
+  animation: digest-found 1.6s var(--ease-standard) both;
+}
+
+@keyframes digest-found {
+  from {
+    background: color-mix(in srgb, var(--accent) 22%, var(--paper));
+  }
+  to {
+    background: var(--paper);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .digest-point.found {
+    animation: none;
+    background: color-mix(in srgb, var(--accent) 12%, var(--paper));
+  }
+}
+
+.digest-text {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.digest-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.digest-tools .icon-btn {
+  margin-left: auto;
+}
+
+/* 頁碼：可以點的小標籤，點了回原文那一頁 */
+.digest-page {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.digest-quote {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.gen-kind {
+  margin-bottom: 12px;
+}

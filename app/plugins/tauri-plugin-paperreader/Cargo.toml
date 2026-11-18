@@ -1,0 +1,40 @@
+[package]
+name = "tauri-plugin-paperreader"
+description = "PaperReader 的平台轉接器：Android 用自有的 Kotlin 程式，電腦用系統的對話框、憑證管理員與剪貼簿"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+links = "tauri-plugin-paperreader"
+
+[lints]
+workspace = true
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# 電腦的平台轉接器：選檔與存檔對話框、用系統預設的程式開檔與網址。Android 的相依圖不受影響。
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+# Windows：金鑰存憑證管理員、剪貼簿，直接呼叫系統介面（`windows-sys` 本來就在相依圖裡，只多開幾個功能）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

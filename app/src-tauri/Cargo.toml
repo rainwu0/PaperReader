@@ -1,0 +1,46 @@
+[package]
+name = "paperreader-app"
+description = "PaperReader 應用：Tauri 外殼的組裝與指令（只轉接，不含資料規則）"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "paperreader_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+# 版面模型：開了才把 ONNX Runtime 編進來，建置時要能從 cdn.pyke.io 取得（或已在
+# `%LOCALAPPDATA%\ort.pyke.io` 的快取裡）原生程式庫。關掉時版面模型的指令一律交回「不支援」，翻譯照規則分段。
+default = ["layout-model"]
+layout-model = ["paperreader-translate/layout-model"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+paperreader-core = { path = "../core" }
+paperreader-translate = { path = "../translate" }
+# 外掛：只有 `src/ext.rs` 引用
+paperreader-ext-links = { path = "../ext/links" }
+paperreader-ext-fulltext = { path = "../ext/fulltext" }
+tauri-plugin-paperreader = { path = "../plugins/tauri-plugin-paperreader" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+lopdf = { version = "0.47", default-features = false }
+# 離線翻譯的橋（等畫面交回譯文）。翻譯套件與 Tauri 本來就用它，不是新的組件
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+# 版面模型：畫面以 Base64 交來的頁面圖（相依圖裡本來就有這個版本，不是新的組件）
+base64 = "0.23"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }

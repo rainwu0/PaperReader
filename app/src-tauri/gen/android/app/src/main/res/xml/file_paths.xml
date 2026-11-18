@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- 只有 Tauri 的 WebChromeClient 拍照上傳時放暫存照片的 getExternalFilesDir(Pictures) -->
+  <external-files-path name="pictures" path="Pictures/" />
+  <!-- 筆記檔交給別的應用（用其他應用打開）：只開放文獻庫的 notes/ 資料夾（共用空間或應用專屬空間） -->
+  <external-path name="notes_shared" path="Documents/PaperReader/notes/" />
+  <external-files-path name="notes_private" path="PaperReader/notes/" />
+  <!-- 匯出的備份檔先放在這裡，交給系統的分享畫面用 -->
+  <cache-path name="exports" path="exports/" />
+</paths>

@@ -1,0 +1,77 @@
+/* 外掛「文獻之間的連結」在文獻資訊裡的兩節。顏色、字級一律用應用的變數（ui/theme.css）。 */
+
+.lk-list .row {
+  padding-left: 0;
+  align-items: flex-start;
+}
+
+/* 庫裡引用這篇的：在內容區裡，不要左邊的列縮排 */
+.lk-cited .row {
+  padding-left: 0;
+}
+
+.lk-list .row-main {
+  align-items: flex-start;
+  cursor: default;
+}
+
+.lk-num {
+  flex: none;
+  min-width: 2.2em;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  padding-top: 2px;
+}
+
+.lk-text {
+  display: block;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.lk-text.clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lk-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+}
+
+/* 連上的那篇：看起來像連結，點了打開 */
+.lk-open {
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  min-height: 32px;
+}
+
+.lk-note {
+  color: var(--text-2);
+}
+
+.lk-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lk-pick {
+  max-height: 55vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}

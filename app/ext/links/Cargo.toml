@@ -1,0 +1,20 @@
+[package]
+name = "paperreader-ext-links"
+description = "外掛：文獻之間的連結，Rust 一側（比對與連結的索引）。依賴核心，不依賴 Tauri"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+paperreader-core = { path = "../../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3"

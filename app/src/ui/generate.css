@@ -1,0 +1,227 @@
+/* generate 區的樣式（產生畫面、設定的翻譯各頁）。顏色與間距用 theme.css 的變數，深淺色都跟著。
+   別的畫面也用的單選卡片（.pick-card）與一排按鈕（.btn-row）在 theme.css。 */
+
+.gen-heading {
+  margin: 0 0 12px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.gen-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* 同步的狀態 */
+.gen-status {
+  padding: 12px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+/* ---------- 翻譯：進度條、金鑰的按鈕列 ---------- */
+
+.gen-bar {
+  height: 10px;
+  margin: 8px 0 12px;
+  border-radius: 6px;
+  background: var(--divider);
+  overflow: hidden;
+}
+
+/* 只動 transform：條本身滿寬，用 scaleX 表示進度 */
+.gen-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform var(--motion-long) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gen-bar > div {
+    transition: none;
+  }
+}
+
+.gen-count {
+  margin: 12px 0 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.gen-existing {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.od-model p {
+  margin: 4px 0;
+}
+
+.od-ask {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+}
+
+/* ---------- 翻譯服務清單、提示詞預設組、術語庫（設定的翻譯各頁） ---------- */
+.btn.small {
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+}
+.field-label {
+  margin: 12px 0 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.svc-row {
+  align-items: center;
+  padding: 0 16px 0 0;
+}
+.svc-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 10px 0 10px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.svc-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  vertical-align: 2px;
+}
+.svc-fallbacks {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.svc-fallbacks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+}
+.svc-fb-name {
+  flex: 1;
+}
+.prompt-item + .prompt-item {
+  border-top: 1px solid var(--divider);
+}
+.prompt-radio {
+  width: 22px;
+  height: 22px;
+  margin-left: 16px;
+  accent-color: var(--accent);
+}
+.prompt-text {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+}
+.prompt-area {
+  min-height: 160px;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.glossary-form {
+  display: grid;
+  gap: 8px;
+}
+
+/* ---------- 翻譯面板與換備用服務 ---------- */
+.gen-panel {
+  margin-top: 8px;
+}
+.gen-langs-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.gen-langs-row .field {
+  flex: 1;
+  min-width: 0;
+}
+.gen-arrow {
+  padding-bottom: 22px;
+  color: var(--text-3);
+}
+.gen-langs {
+  margin: 0 0 12px;
+  color: var(--text-2);
+}
+.block-hint {
+  display: block;
+}
+.gen-fallback {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+/* ---------- 逐段對照：比較服務、匯出 ---------- */
+.compare-item {
+  margin: 0 0 10px;
+}
+.compare-item .compare-seg {
+  margin-bottom: 4px;
+}
+.compare-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cmp-sheet {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.cmp-seg {
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.cmp-col {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+}
+.cmp-name {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.cmp-text {
+  margin: 4px 0 8px;
+}
+.cmp-format {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.cmp-format .btn-row {
+  margin-top: 8px;
+}
+.prompt-edit .field small {
+  display: block;
+}

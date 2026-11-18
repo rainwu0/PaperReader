@@ -1,0 +1,44 @@
+{
+  "name": "paperreader-app",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "rainwu0",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/copy-pdfjs-assets.mjs && node scripts/licenses.mjs",
+    "predev": "npm run assets",
+    "dev": "vite",
+    "prebuild": "npm run assets",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "test:ui": "node --test scripts/*-test.mjs src/ext/*/*-test.mjs",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@pdf-lib/fontkit": "1.1.1",
+    "@tauri-apps/api": "2.12.4",
+    "micromark": "4.0.3",
+    "motion": "14.9.0",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.5.438",
+    "perfect-freehand": "1.2.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "oxlint": "1.93.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}

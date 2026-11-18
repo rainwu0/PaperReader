@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 文獻庫放在使用者看得到、別的工具連得到的資料夾（Documents/PaperReader），所以要「所有檔案存取」。
+         用到那項功能（第一次加入文獻）時才要求，被拒絕仍可使用。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- 連網只有一個用途：把論文的文字送到使用者自己設定的翻譯服務（使用者已同意；每次送出前都會詢問，
+         除非使用者在設定裡勾了「不再詢問」）。基本功能（閱讀、劃線、筆記、紀錄）不連網。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <!-- 關掉系統備份與換手機時的搬移：
+         設定檔裡有這台裝置的代號，被搬到新手機會讓兩台裝置用同一個代號，破壞「每台裝置一個代號」；
+         應用專屬空間的文獻庫也會在使用者不知情時被傳到雲端，和「基本功能不依賴雲端」不符。
+         備份與換裝置日後由「備份檔」這項擴充處理，讓使用者看得到、自己決定。 -->
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.paperreader_app"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- 筆記檔裡的「在 PaperReader 開啟」連結：paperreader://open?paper=…&amp;page=…（只有這個對外） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="paperreader" android:host="open" />
+            </intent-filter>
+            <!-- 別的應用分享進來的 PDF（一份或多份）：平台轉接器收下、複製成暫存檔，畫面領取後走「加入」 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+        </activity>
+
+        <!-- Tauri 範本的檔案提供者，只有網頁要求拍照上傳（<input type=file capture>）時才會用到，
+             這個應用沒有那種欄位。範圍縮到它實際會用的資料夾（應用專屬空間的 Pictures/），
+             不再開放整個外部儲存與暫存資料夾。不對外（exported=false）。 -->
+        <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

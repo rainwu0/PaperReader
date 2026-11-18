@@ -1,0 +1,53 @@
+name: 回報問題 / Bug report
+description: 應用的行為和預期不同 / Something does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全問題請不要在這裡回報，請見 [SECURITY.md](../blob/main/SECURITY.md)。
+        For security problems, do not use this form; see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼事 / What happened
+      description: 你做了什麼、看到什麼 / What you did and what you saw
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期的行為 / Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟 / Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 應用版本 / App version
+      description: 設定 → 關於 / Settings → About
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 裝置與 Android 版本 / Device and Android version
+      placeholder: "例如 / e.g. Pixel 8, Android 15"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他資訊 / Additional information
+      description: 截圖或錯誤訊息。請不要貼上金鑰或論文的內容 / Screenshots or error messages. Do not paste API keys or paper contents.
+    validations:
+      required: false

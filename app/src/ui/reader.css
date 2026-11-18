@@ -1,0 +1,1578 @@
+/* 閱讀畫面：文字層、劃線、筆刷、工具箱、筆記窗格。顏色與間距用 theme.css 的變數。 */
+
+/* ---------- 閱讀畫面 ---------- */
+
+.reader {
+  background: var(--reader-bg);
+  padding: 0;
+}
+
+/* 捲動區放在狀態列與手勢列之間：頁面不會從狀態列的圖示底下透出來 */
+.reader-scroll {
+  position: absolute;
+  top: var(--inset-top);
+  bottom: var(--inset-bottom);
+  left: 0;
+  right: 0;
+  overflow: auto;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  padding-left: var(--inset-left);
+  padding-right: var(--inset-right);
+}
+
+.reader-wrap {
+  margin: 0 auto;
+}
+
+/* 論文頁面維持原色，深色模式也不反轉 */
+.pg {
+  position: relative;
+  margin-left: auto;
+  margin-right: auto;
+  background: #ffffff;
+}
+
+.pg canvas {
+  display: block;
+}
+
+.reader-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--tap) + var(--inset-top));
+  padding: var(--inset-top) 4px 0 4px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--divider);
+}
+
+.reader-bar h1 {
+  flex: 1;
+  margin: 0;
+  padding: 0 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 頁碼可以按（跳到指定頁）：按的範圍有 48 像素高，看得到的藥丸比較矮 */
+.page-pill {
+  position: absolute;
+  left: 50%;
+  bottom: var(--inset-bottom);
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  min-height: var(--tap);
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.pill-face {
+  padding: 4px 14px;
+  border-radius: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+/* 閱讀時頁面跟著深色：選項，預設關；只在外觀是深色時作用。用反相加色相轉 180 度，
+   圖表與圖片的顏色也會跟著變（設定裡有說明），所以不是預設 */
+:root[data-theme="dark"] .reader.dark-pages .pg {
+  filter: invert(0.92) hue-rotate(180deg);
+}
+
+.outline-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+/* 檢視切換裡目前那一個：選中樣式加勾（讀屏念 aria-current，不另寫「目前」） */
+.outline-item[aria-current="true"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.outline-item[aria-current="true"]::after {
+  content: " ✓";
+}
+
+/* ---------- 首次提示：閱讀畫面頂端的小卡，按「知道了」收起 ---------- */
+
+/* 放在下方、蓋在工具箱之上：不擋頂列，也不被浮動的工具箱蓋住 */
+.reader-hint {
+  top: auto;
+  bottom: calc(var(--inset-bottom) + 76px);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: var(--shadow-raised);
+}
+
+.reader-hint > span {
+  flex: 1;
+}
+
+.reader-hint-ok {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ---------- 頁面上的幾層 ---------- */
+
+/* 文字層的尺寸變數（--scale-factor 由 pdfView.ts 依這一頁的縮放設在 .pg 上） */
+.pg {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+/* PDF.js 的文字層：透明、可以用瀏覽器原生的選取選字（劃線用）。規則取自 PDF.js 的 pdf_viewer.css，攤平寫在這裡。 */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  z-index: 2;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+.textLayer span,
+.textLayer br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+  display: contents;
+}
+
+.textLayer ::selection {
+  background: rgba(31, 61, 143, 0.35);
+  color: transparent;
+}
+
+/* 劃線畫在文字層下面：不擋選取；琥珀色只留給劃線。
+   顏色 `--hl-fill` 由 `pdfView.ts` 設在劃線層上（`api/types.ts` 的 HIGHLIGHT_COLOR，和匯出的 PDF 同一個值）；
+   深色主題的頁面仍是白紙（或整頁反相），所以不跟著主題換。
+   色彩增值（multiply）設在整層上：這一層有 z-index，自成一個疊放層，設在每一條劃線上只會和這一層透明的底混合、
+   碰不到底下的頁面，不透明的黃會把字蓋掉；整層和頁面混合，白紙變成劃線色、黑字仍是黑字（和匯出的 PDF 相同） */
+.hl-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+.hl {
+  position: absolute;
+  background: var(--hl-fill);
+  border-radius: 2px;
+}
+
+.hl.has-comment {
+  border-bottom: 2px solid rgba(176, 116, 0, 0.9);
+}
+
+/* 從筆記跳到劃線：閃三下指出位置（450ms 一下 = --motion-long + --motion-quick） */
+.hl.flash {
+  animation: hl-flash calc(var(--motion-long) + var(--motion-quick)) var(--ease-standard) 3;
+}
+
+@keyframes hl-flash {
+  50% {
+    background: rgba(255, 140, 0, 0.8);
+  }
+}
+
+/* 移除動畫時不閃，改成靜態的外框；`pdfView.ts` 1.8 秒後拿掉 */
+@media (prefers-reduced-motion: reduce) {
+  .hl.flash {
+    animation: none;
+    background: rgba(255, 140, 0, 0.55);
+    outline: 2px solid rgba(176, 90, 0, 0.95);
+  }
+}
+
+/* 筆刷的畫布：平常不接觸控；筆刷打開時，手指在頁面上畫 */
+.stroke-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.reader-scroll.brush-on .stroke-layer {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.reader-scroll.brush-on .textLayer {
+  pointer-events: none;
+}
+
+/* ---------- 選取之後的「劃線」 ---------- */
+
+.sel-pill {
+  position: fixed;
+  left: 50%;
+  translate: -50% 0; /* 個別的 translate：transform 留給轉換 */
+  z-index: 9;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.sel-pill button {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+/* ---------- 工具箱 ---------- */
+
+.tb-mini {
+  position: fixed;
+  z-index: 8;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--accent);
+  box-shadow: var(--shadow-raised);
+  opacity: 0.92;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tb-mini svg,
+.tb-btn svg,
+.tb-grip svg,
+.tb-min svg,
+.brush-bar svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tb-float {
+  position: fixed;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - var(--inset-top) - var(--inset-bottom) - 8px);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+
+.tb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--divider);
+}
+
+.tb-grip,
+.tb-min {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.tb-grip {
+  touch-action: none;
+  cursor: grab;
+}
+
+.tb-tools {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: calc(5 * 60px);
+  overflow-y: auto;
+}
+
+/* 排在畫面左右兩側時排成兩欄的直式，不要拉得太長蓋住論文 */
+.tb-float.vertical .tb-tools {
+  max-width: calc(2 * 60px);
+}
+
+.tb-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: none;
+  width: 60px;
+  min-height: 56px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+}
+
+.tb-label {
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.tb-btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+/* 有「換一個」的工具（譯本）：右上角一個小箭頭，按了打開選單（長按也是） */
+.tb-slot {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.tb-more {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.tb-more svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tb-btn {
+  -webkit-touch-callout: none;
+}
+
+/* 圖釘：釘住時選了檢視也不收起 */
+.tb-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.tb-pin[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.tb-pin svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tb-btn[aria-disabled="true"] {
+  color: var(--text);
+  opacity: 0.55;
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--divider) 6px 7px);
+}
+
+/* 停靠：整列（或整欄），吸附在畫面邊緣 */
+.tb-docked {
+  position: fixed;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  background: var(--raised);
+  border: 0 solid var(--border);
+}
+
+.tb-docked.top {
+  left: 0;
+  right: 0;
+  top: var(--inset-top);
+  border-bottom-width: 1.5px;
+}
+
+.tb-docked.bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-bottom: var(--inset-bottom);
+  border-top-width: 1.5px;
+}
+
+.tb-docked.left,
+.tb-docked.right {
+  top: var(--inset-top);
+  bottom: var(--inset-bottom);
+  flex-direction: column;
+}
+
+.tb-docked.left {
+  left: 0;
+  border-right-width: 1.5px;
+}
+
+.tb-docked.right {
+  right: 0;
+  border-left-width: 1.5px;
+}
+
+.tb-scroll {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tb-scroll.vertical {
+  flex-direction: column;
+  overflow-x: visible;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.tb-page {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 拖到邊緣時，預告會停靠在哪裡 */
+.tb-snap {
+  position: fixed;
+  z-index: 7;
+  background: var(--accent-soft);
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+}
+
+.tb-snap.top {
+  left: 0;
+  right: 0;
+  top: var(--inset-top);
+  height: 72px;
+}
+
+.tb-snap.bottom {
+  left: 0;
+  right: 0;
+  bottom: var(--inset-bottom);
+  height: 72px;
+}
+
+.tb-snap.left {
+  left: 0;
+  top: var(--inset-top);
+  bottom: var(--inset-bottom);
+  width: 72px;
+}
+
+.tb-snap.right {
+  right: 0;
+  top: var(--inset-top);
+  bottom: var(--inset-bottom);
+  width: 72px;
+}
+
+/* ---------- 筆刷列 ---------- */
+
+.brush-bar {
+  position: fixed;
+  left: 50%;
+  translate: -50% 0; /* 個別的 translate：transform 留給轉換 */
+  bottom: calc(var(--inset-bottom) + 64px);
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap; /* 按鈕多了，窄的螢幕排成兩列 */
+  justify-content: center;
+  gap: 2px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.brush-bar.above-dock {
+  bottom: calc(var(--inset-bottom) + 80px);
+}
+
+.brush-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+}
+
+.brush-bar button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.brush-swatch span {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text);
+}
+
+.brush-width span {
+  width: 26px;
+  border-radius: 4px;
+  background: var(--text);
+}
+
+/* 閱讀畫面的提示不要蓋住停靠在下緣的工具列 */
+.reader .toast {
+  bottom: calc(96px + var(--inset-bottom));
+}
+
+/* ---------- 筆記窗格 ---------- */
+
+/* 窗格打開時，論文的捲動區讓出它占的地方；--pane-lift 是窗格底邊離畫面底的距離（停靠在下緣的工具列之上） */
+.reader.pane-open .reader-scroll {
+  bottom: calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px));
+  right: var(--pane-w, 0px);
+}
+
+.reader.pane-open .page-pill {
+  bottom: calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px));
+  left: calc((100% - var(--pane-w, 0px)) / 2);
+}
+
+.reader.pane-open .brush-bar {
+  bottom: calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px) + 12px);
+  left: calc((100% - var(--pane-w, 0px)) / 2);
+}
+
+.notes-pane {
+  position: fixed;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  color: var(--text);
+  border: 0 solid var(--border);
+}
+
+.notes-pane.portrait,
+.notes-pane.peek {
+  left: 0;
+  right: 0;
+  bottom: var(--pane-lift, var(--inset-bottom));
+  border-top-width: 1.5px;
+}
+
+.notes-pane.landscape.half {
+  top: var(--inset-top);
+  right: 0;
+  bottom: var(--pane-lift, var(--inset-bottom));
+  left: auto;
+  border-left-width: 1.5px;
+  border-top-width: 0;
+}
+
+.notes-pane.full {
+  z-index: 9;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-top: var(--inset-top);
+  padding-bottom: var(--inset-bottom);
+  border-width: 0;
+}
+
+.notes-pane.peek {
+  height: 56px;
+}
+
+/* 拖動分隔線：直式在窗格上緣，橫式在左緣 */
+.np-handle {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  z-index: 1;
+}
+
+.notes-pane.portrait .np-handle {
+  left: 0;
+  right: 0;
+  top: -18px;
+  height: 36px;
+  cursor: row-resize;
+}
+
+.notes-pane.landscape .np-handle {
+  top: 0;
+  bottom: 0;
+  left: -18px;
+  width: 36px;
+  cursor: col-resize;
+}
+
+.np-handle span {
+  display: block;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.notes-pane.portrait .np-handle span {
+  width: 48px;
+  height: 5px;
+}
+
+.notes-pane.landscape .np-handle span {
+  width: 5px;
+  height: 48px;
+}
+
+.np-head {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.notes-pane.peek .np-head {
+  border-bottom: 0;
+}
+
+.np-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-md);
+}
+
+.np-title strong {
+  flex: none;
+  white-space: nowrap;
+}
+
+.np-doc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  opacity: 0.75;
+}
+
+.np-state {
+  flex: none;
+  font-size: var(--fs-sm);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.np-sizes {
+  flex: none;
+  display: flex;
+}
+
+.np-sizes button,
+.np-more,
+.np-fmt,
+.np-mode button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.np-sizes button[aria-pressed="true"],
+.np-mode button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  color: var(--accent);
+}
+
+.np-sizes svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.np-more {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.np-menu {
+  position: absolute;
+  right: 8px;
+  top: calc(100% - 4px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+
+.notes-pane.peek .np-menu {
+  top: auto;
+  bottom: calc(100% - 4px);
+}
+
+.np-menu button {
+  min-height: var(--tap);
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-md);
+}
+
+.np-menu button:last-child {
+  border-bottom: 0;
+}
+
+.np-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.np-body[hidden] {
+  display: none;
+}
+
+.np-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--divider);
+}
+
+.np-fmt {
+  font-size: 17px;
+  min-width: 40px;
+}
+
+.np-fmt:disabled {
+  opacity: 0.4;
+}
+
+.np-fmt.fmt-bold {
+  font-weight: 800;
+}
+
+.np-fmt.fmt-italic {
+  font-style: italic;
+}
+
+.np-spacer {
+  flex: 1;
+}
+
+.np-mode {
+  display: flex;
+}
+
+.np-mode button {
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.np-editor[hidden] {
+  display: none;
+}
+
+.md-editor {
+  min-height: 140px;
+}
+
+.np-preview {
+  min-height: 140px;
+  padding: 8px 2px;
+  overflow-wrap: anywhere;
+}
+
+.md-preview {
+  white-space: pre-line; /* 單獨的換行顯示成換行 */
+}
+
+.md-preview h1,
+.md-preview h2,
+.md-preview h3 {
+  margin: 16px 0 8px;
+  font-size: var(--fs-lg, 18px);
+}
+
+.md-preview p,
+.md-preview ul,
+.md-preview ol {
+  margin: 8px 0;
+}
+
+.md-preview blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+}
+
+.md-preview a {
+  color: var(--accent);
+}
+
+.md-preview code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+}
+
+.notes-section {
+  margin: 20px 0 8px;
+  font-size: var(--fs-md);
+}
+
+.notes-readonly {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+/* 存想法時撞上別處的修改：沒存進去的那段 */
+.np-stash {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  font-size: var(--fs-sm);
+}
+
+.np-stash p {
+  margin: 0 0 6px;
+}
+
+.np-stash .np-stash-text {
+  max-height: 8em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.np-stash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notes-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notes-item {
+  border-bottom: 1px solid var(--divider);
+}
+
+.notes-main {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 0 8px;
+}
+
+.notes-jump {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: var(--tap);
+  padding: 8px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.notes-page {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.notes-quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding-left: 8px;
+  border-left: 3px solid rgba(255, 196, 0, 0.9);
+  font-size: var(--fs-md);
+}
+
+.notes-comment {
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px dashed var(--divider);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+}
+
+.notes-comment.none {
+  opacity: 0.7;
+}
+
+.notes-inline textarea {
+  width: 100%;
+}
+
+/* ---------- 譯文疊加：譯文畫在原段落的位置上，蓋住原文 ---------- */
+
+.ov-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.ov-seg {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 0 1px;
+  background: #fbfaf6;
+  color: #1a1a1a;
+  line-height: 1.22;
+  text-align: justify;
+  word-break: break-word;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity var(--motion-quick) var(--ease-standard);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 點一下暫時看原文：譯文變透明（仍然收得到下一次點擊） */
+.ov-seg.peek {
+  opacity: 0;
+}
+
+/* 打開原頁疊譯文：譯文層淡入；移除動畫時直接換 */
+.ov-layer {
+  animation: fade-in var(--motion-quick) var(--ease-standard);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-layer {
+    animation: none;
+  }
+
+  .ov-seg {
+    transition: none;
+  }
+}
+
+/* 疊加開著時原文的文字層關掉：選取的是譯文，不是底下看不見的原文 */
+.overlay-on .textLayer {
+  display: none;
+}
+
+/* 從譯文跳回 PDF：框出那一段一下（`pdfView.ts` 1.6 秒後拿掉） */
+.seg-focus {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  animation: fade-in var(--motion-quick) var(--ease-standard);
+}
+
+/* ---------- PDF 上點一段的小框：在譯本上放原文、在原文上放譯文 ---------- */
+
+.seg-pop {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 45vh;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-raised);
+  overflow-y: auto;
+}
+
+.seg-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.seg-pop-text {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* 改的時候：原文縮成幾行可捲的參考，輸入框占其餘的空間，「儲存」固定在下面 */
+.seg-pop.editing {
+  max-height: none;
+  overflow: hidden;
+}
+
+.seg-pop.editing .seg-pop-ref {
+  flex: none;
+  max-height: 6.5em;
+  overflow-y: auto;
+}
+
+.seg-pop.editing .seg-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.seg-pop.editing .seg-input {
+  flex: 1;
+  min-height: 4em;
+  max-height: none;
+  field-sizing: fixed;
+}
+
+.seg-pop-ref,
+.tx-ref {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.seg-pop-actions,
+.tx-actions,
+.seg-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 改一段：輸入框隨內容長高（`field-sizing`；不支援的網頁元件用最小高度） */
+.seg-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.seg-input {
+  width: 100%;
+  min-height: 6em;
+  max-height: 50vh;
+  field-sizing: content;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* 譯文裡就地改：段落很長時「儲存」「取消」貼在畫面下緣（鍵盤上方），不必捲下去找 */
+.text-body .seg-editor-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 0;
+  background: var(--paper);
+}
+
+/* 改的時候頁碼標收起，不蓋住輸入框 */
+.text-view:has(.tx-seg.editing) .text-pill {
+  display: none;
+}
+
+.seg-marks {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 6px;
+  vertical-align: 0.1em;
+}
+
+.seg-mark {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* ---------- 譯文（閱讀模式）：排好的中文全文 ---------- */
+
+.compare-body {
+  position: relative; /* 段落的 offsetTop 以捲動區為準（捲動定位） */
+}
+
+.compare.text-view {
+  background: var(--paper);
+}
+
+/* 字級預設 18、行高 1.7，一行約 20 到 24 個中文字 */
+.text-body {
+  padding: 8px 18px calc(72px + var(--inset-bottom));
+  font-size: var(--text-size, 18px);
+  line-height: 1.7;
+}
+
+.tx-seg {
+  margin: 0 0 0.9em;
+}
+
+.tx-text {
+  border-radius: 6px;
+  outline-offset: 2px;
+  overflow-wrap: anywhere;
+  -webkit-user-select: none; /* 長按是「改」，不是選字 */
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.tx-seg.open .tx-text {
+  background: var(--accent-soft);
+}
+
+.tx-heading .tx-text {
+  margin-top: 0.6em;
+  font-size: 1.15em;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.tx-caption .tx-text {
+  color: var(--text-2);
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+
+.tx-source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--divider);
+}
+
+.tx-seg.editing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tx-seg.editing .seg-input {
+  max-height: 40vh; /* 鍵盤彈出、畫面變矮時也留得下原文與「儲存」；更長的在框裡捲 */
+  font-size: var(--text-size, 18px);
+}
+
+/* 頁碼標：同 PDF 的頁碼標，放在角落、不能按 */
+.text-pill {
+  position: absolute;
+  pointer-events: none;
+}
+
+.tx-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--accent-soft);
+  font-size: var(--fs-md);
+}
+
+.tx-banner > span {
+  flex: 1;
+  min-width: 10em;
+}
+
+.tx-banner-close {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 22px;
+}
+
+.tx-size-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.tx-size-row > span:first-child {
+  flex: 1;
+}
+
+.tx-size-value {
+  min-width: 2em;
+  text-align: center;
+  font-weight: 700;
+}
+
+.toc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.toc-item .muted {
+  flex: none;
+}
+
+/* 檢查譯文：每段的按鈕多了，窄的螢幕換行 */
+.compare .compare-tools {
+  flex-wrap: wrap;
+}
+
+/* ---------- 逐段對照：蓋滿畫面，原文與譯文成對 ---------- */
+
+.compare {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  padding-top: var(--inset-top);
+}
+
+.compare-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.compare-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.compare-title h1 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.compare-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 16px calc(24px + var(--inset-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+
+.compare-hint {
+  margin: 4px 0 0;
+}
+
+.compare-page-title {
+  margin: 20px 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.compare-seg {
+  display: block;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--paper);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+}
+
+.compare-src {
+  display: block;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.compare-tgt {
+  display: block;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--divider);
+  line-height: 1.6;
+}
+
+.compare-missing {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+/* 自動檢查標出的段落：譯文下方一行提示，與整頁上方的篩選列 */
+.compare-issues {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.85em;
+  color: var(--danger, var(--text-2));
+}
+
+/* 這一段是哪個服務翻的（一份譯本用了不只一個服務時才每段標出） */
+.compare-by {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8em;
+  color: var(--text-2);
+}
+
+.compare-flag-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2, var(--accent-soft));
+}
+
+/* ---------- 匯出與列印的面板 ---------- */
+
+.export-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.export-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: var(--tap);
+  padding: 10px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-md);
+}
+
+.export-item:last-child {
+  border-bottom: 0;
+}
+
+.export-item[disabled] {
+  opacity: 0.45;
+}
+
+.export-item:active:not([disabled]) {
+  background: var(--accent-soft);
+}
+
+.export-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+}
+
+.export-label .muted {
+  font-weight: 400;
+}
+
+.export-format {
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.bib-group {
+  margin: 12px 0 0;
+}
+
+.bib-missing {
+  margin-top: 12px;
+}
+
+.export-file {
+  margin: 0 0 4px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}

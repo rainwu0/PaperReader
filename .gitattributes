@@ -1,0 +1,5 @@
+# 版本庫裡的文字檔一律用 LF 換行，不論在哪個系統上編輯。
+* text=auto eol=lf
+# Windows 的批次檔在 LF 換行下可能執行錯誤，維持 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf

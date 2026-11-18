@@ -1,0 +1,22 @@
+[package]
+name = "paperreader-ext-fulltext"
+description = "外掛：內文搜尋，Rust 一側（切詞、查詢、找位置與 SQLite FTS5 的索引）。依賴核心與 rusqlite，不依賴 Tauri"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+paperreader-core = { path = "../../core" }
+# SQLite 的 FTS5。`bundled`：把 SQLite 的 C 程式編進來（公有領域），FTS5 一律開著
+# 不開預設功能：不要語句快取（hashlink）與 WebAssembly 的 SQLite（sqlite-wasm-rs），少帶相依
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

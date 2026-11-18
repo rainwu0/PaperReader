@@ -1,0 +1,78 @@
+# 對應 check.ps1 的八步：
+#   介面：npm ci、typecheck、lint、test:ui、build
+#   Rust：cargo fmt --check、clippy -D warnings、test --workspace
+#   cargo deny check（另一個工作，用官方的 EmbarkStudios/cargo-deny-action）
+# 工作目錄是 app。Rust 的外殼依賴 Tauri，用 Windows 的執行環境，免去安裝 Linux 的系統函式庫。
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: app
+
+      - name: 介面相依（npm ci）
+        run: npm ci
+
+      - name: 介面型別檢查
+        run: npm run typecheck
+
+      - name: 介面靜態檢查
+        run: npm run lint
+
+      - name: 介面邏輯測試
+        run: npm run test:ui
+
+      - name: 介面建置（Rust 外殼編譯時要內嵌建置結果）
+        run: npm run build
+
+      - name: 排版
+        run: cargo fmt --all --check
+
+      - name: 靜態檢查
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 測試
+        run: cargo test --workspace
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.12
+        with:
+          manifest-path: app/Cargo.toml
+          command: check

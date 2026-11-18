@@ -1,0 +1,127 @@
+/* 同步區的樣式：同步頁、匯入同步包的預覽、首頁的「從另一台加入」。顏色與間距用 theme.css 的變數，深淺色都跟著。
+   單選卡片沿用 theme.css 的 .pick-card（粗邊與實心圓點，不只靠顏色分辨）。 */
+
+.sync-lead {
+  margin: 4px 4px 16px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.sync-unfinished {
+  margin: 0 0 16px;
+}
+
+.sync-points {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.sync-points li {
+  margin-bottom: 6px;
+}
+
+/* 預覽頁：最下面固定一列「合併」，不被手勢列蓋住 */
+.sync-preview .scroll {
+  padding-bottom: 24px;
+}
+
+.sync-bar {
+  flex: none;
+  padding: 12px 16px calc(12px + var(--inset-bottom));
+  border-top: 1px solid var(--divider);
+  background: var(--bg);
+}
+
+.sync-preview .notice {
+  margin: 12px 0;
+}
+
+.sync-sum {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.sync-sum-line {
+  display: flex;
+  gap: 12px;
+}
+
+.sync-sum-label {
+  flex: none;
+  font-weight: 600;
+}
+
+.sync-block {
+  margin-top: 20px;
+}
+
+.sync-h {
+  margin: 0 0 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.sync-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: var(--fs-sm);
+}
+
+.sync-list li {
+  margin-bottom: 6px;
+}
+
+/* 一個衝突：篇名、說明，兩邊並排的兩張卡片（預設已選），需要時下面一列「兩個都留」 */
+.sync-conflict {
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.sync-conflict-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sync-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.sync-sides .pick-card {
+  margin: 0;
+  height: 100%;
+}
+
+.sync-side .pick-card-text {
+  overflow-wrap: anywhere;
+}
+
+/* 想法、短評可能很長：卡片裡最多顯示八行 */
+.sync-side-body {
+  display: -webkit-box;
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sync-side[disabled] {
+  opacity: 0.55;
+}
+
+.sync-conflict > .pick-card {
+  margin-top: 8px;
+}
+
+/* 首頁空狀態的第二顆按鈕 */
+.home-join .btn {
+  margin-top: 8px;
+}

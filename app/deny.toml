@@ -1,0 +1,97 @@
+# cargo-deny 的設定（版本 0.20.2；寫法依官方文件 https://embarkstudios.github.io/cargo-deny/）。
+# 執行：cargo deny check（check.ps1 裡的一步）。
+#
+# 檢查四件事：授權（licenses）、已知漏洞（advisories）、禁用與重複的相依（bans）、來源（sources）。
+# 漏洞與來源用預設；授權只允許下面逐一列出的寬鬆授權。
+
+[graph]
+# 只檢查實際會編進產出的平台：電腦、Android 模擬器、Android 實機。
+# 不寫的話，會把只在 wasm、UEFI 等其他平台才用到的套件也算進來。
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-linux-android",
+    "aarch64-linux-android",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+# 已知漏洞與不再維護的通報用預設（資料庫是 RustSec），不整類放行。
+# 下面四則逐則按編號忽略，原因與再看的時機寫在各則。
+# 四則都只經 hayagriva 0.10.1（引用格式，core/src/citation.rs）帶進來；hayagriva 0.10.1 與
+# citationberg 0.7.0 已是 crates.io 上的最新版，鎖檔裡沒有可升的相容版本（2026-11-17 查）。
+# 再看的時機：hayagriva 或 citationberg 在 crates.io 出新版時，升級後拿掉已不需要的項目。
+ignore = [
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38.4（經 citationberg）屬性重複檢查是 O(N²)。只用來解析內嵌在程式裡的 CSL 格式檔與語系檔（citation.rs 的 include_str!），不解析外來的 XML。citationberg 0.7.0 要求 ^0.38.1，0.41 以上升不上去" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38.4（經 citationberg）NsReader 的命名空間宣告不設上限。同上：輸入只有內嵌的 CSL 格式檔與語系檔，不解析外來的 XML" },
+    { id = "RUSTSEC-2024-0436", reason = "paste 不再維護（不是漏洞）。hayagriva 在編譯時用它的巨集產生名稱，不進執行期；目前沒有不用它的 hayagriva 版本" },
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml 不再維護（不是漏洞），經 serde_yaml。hayagriva 只在 io::from_yaml_str、to_yaml_str 用到，我們的程式不呼叫這兩個函式，不讀寫 YAML" },
+]
+
+[licenses]
+# 只允許目前相依實際用到的寬鬆授權，逐一列出，不整類放行：
+#   MIT          多數套件
+#   Apache-2.0   多數套件（與 MIT 雙授權）
+#   Unicode-3.0  unicode-ident 的授權是 (MIT OR Apache-2.0) AND Unicode-3.0，兩個條件都要滿足
+#   Zlib         foldhash（indexmap 與 hashbrown 帶進來的）、zlib-rs
+#   BSD-3-Clause alloc-no-stdlib、alloc-stdlib、brotli（Tauri 帶進來的；brotli 是「BSD-3-Clause AND MIT」）
+#   ISC          ring、rustls-webpki、untrusted（翻譯引擎的 HTTPS：rustls 與 ring）。ISC 是和 MIT 等價的寬鬆授權
+#   0BSD         roman-numerals-rs（hayagriva 帶進來的，「0BSD OR CC0-1.0」取 0BSD）。0BSD 連保留聲明都不要求，
+#                比 MIT 還寬
+#   CDLA-Permissive-2.0  webpki-roots（內含的根憑證清單，是資料；寬鬆，只要求保留授權聲明）
+#   MPL-2.0      Tauri 帶進來的七個組件（cssparser、cssparser-macros、dtoa-short、option-ext、selectors
+#                各版本）。原樣使用、不修改；「關於」頁註明它們的原始碼網址。
+#                MPL-2.0 是檔案層級的弱著作權左傾授權：只要求「修改過的那些檔案」保持開源，
+#                不動它們的原始碼就沒有額外義務，所以可以和其餘程式一起發布。
+# 另外有些套件寫的是「BSD-2-Clause OR Apache-2.0 OR MIT」、「Unlicense OR MIT」、
+# 「Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT」：這些「或」的選項裡都有 MIT，
+# 取 MIT 即可，不需要另外允許 BSD-2-Clause、Unlicense 或 LLVM 例外。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+# 工作區自己的套件（paperreader-core、prcli）沒有宣告授權：專案的授權方式使用者還沒決定
+# 而且 Cargo.toml 設了 publish = false，不會發布到 crates.io。
+# cargo-deny 官方的做法是把這種「私有」套件排除在授權檢查之外。
+# 授權決定、準備公開時，這一行要拿掉，並在 Cargo.toml 加回 license。
+ignore = true
+registries = []
+
+[bans]
+# 同一個套件有多個版本只警告，不失敗（目前有幾組是上游相依造成的）。
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# 只允許 crates.io；不允許其他登錄庫與 git 來源。
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "介面呼叫應用自己的指令（不需另外授權）。核心的 API 只用到 Android 返回鍵的監聽（nav.ts），所以只開登記與取消監聽兩項。日後用到哪個再加哪個。",
+  "windows": ["main"],
+  "permissions": ["core:app:allow-register-listener", "core:app:allow-remove-listener"]
+}

@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["core", "cli", "translate", "src-tauri", "plugins/tauri-plugin-paperreader", "ext/*"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+# 最低需要的 Rust 版本；太舊的工具鏈 cargo 會直接報錯。目前用的是 1.93.1。
+rust-version = "1.93"
+# 專案的授權方式：Apache-2.0。不發布到 crates.io。
+license = "Apache-2.0"
+# 著作權人：只寫 GitHub 帳號名，不寫其他個人資料。
+authors = ["rainwu0"]
+publish = false
+
+# 檢查等級：用 clippy 的預設等級（不開 pedantic 等加嚴等級），警告一律當成失敗。
+# 成員在自己的 Cargo.toml 寫 `[lints] workspace = true` 繼承。
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
