@@ -363,8 +363,11 @@
   background: #f2b400;
 }
 
+/* 寬度照內容：短評短的卡片窄、長的到最寬（`style.maxWidth`，由 pdfView 照旁邊的空間給）換行；寫明 max-content，
+   寬度才不會跟著放的位置變（絕對定位、寬度自動時會照「左緣到頁緣」的空間縮） */
 .cm-card {
   position: absolute;
+  width: max-content;
   margin: 0;
   padding: 6px 10px 0;
   border: 1px solid rgba(140, 92, 0, 0.55);
@@ -382,7 +385,13 @@
   margin: 0;
 }
 
+/* 引句不撐寬卡片（寬度由短評與按鈕決定）：自己的寬度算 0、再撐滿卡片，放不下的截成刪節號 */
 .cm-quote {
+  width: 0;
+  min-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: #5b5b5b;
   font-size: 13px;
 }
@@ -504,11 +513,14 @@
   stroke-linejoin: round;
 }
 
+/* 寬度寫明照內容（不是自動）：固定定位、寬度自動的話，寬度會跟著「左緣到畫面右緣」的空間變，
+   夾回畫面時往左挪一次就變寬一次，越點越寬（toolboxPlace.ts） */
 .tb-float {
   position: fixed;
   z-index: 8;
   display: flex;
   flex-direction: column;
+  width: max-content;
   max-width: calc(100vw - 8px);
   max-height: calc(100vh - var(--inset-top) - var(--inset-bottom) - 8px);
   border: 1.5px solid var(--border);

@@ -13,14 +13,16 @@ import { HIGHLIGHT_COLOR, type Rect } from "../../api/types";
 import { columnAt, layoutPages, type ColumnSpan, type PageInput } from "../../translate/layout";
 import { t as say } from "../../strings";
 import {
-  cardWidth,
+  cardMaxWidth,
   markerRoom,
   placeCards,
   placeMarkers,
   quoteHead,
   sideOf,
+  type CardInput,
   type CardOptions,
   type CommentAnchor,
+  type Side,
 } from "./commentLayout";
 import { coversFromInfo, filterChunk, type ChunkLike, type Covers, type TextItemLike } from "../../translate/textFilter";
 import { InkLayer, type BrushStyle, type InkStroke, type NewStroke } from "./pdfInk";
@@ -52,12 +54,12 @@ const PRELOAD = 0.6;
 const ZOOM_ANIM_MS = 220;
 /** 雙擊放大算不出欄時的縮放：頁寬的兩倍（縮放 1 倍是頁寬剛好填滿畫面）。 */
 const FALLBACK_ZOOM = 2;
-/** 短評顯示層：頁緣標記的邊長與離頁緣多遠、卡片的寬與間距（CSS 像素，不隨縮放變）。 */
+/** 短評顯示層：頁緣標記的邊長與離頁緣多遠、卡片的最寬最窄與間距（CSS 像素，不隨縮放變）。 */
 const MARK_SIZE = 22;
 const MARK_INSET = 3;
 /** 標記和那一欄文字之間的間距。 */
 const MARK_GAP = 3;
-const CARD: CardOptions = { width: 280, inset: 6, gap: 6 };
+const CARD: CardOptions = { width: 300, minWidth: 140, inset: 6, gap: 6 };
 
 /** 大綱的一項（攤平後）：標題、第幾層（0 是最上層）、指向的位置（PDF.js 的目標，解成頁碼要再問一次）。 */
 export interface OutlineEntry {
@@ -1095,35 +1097,39 @@ export class PdfView {
       });
       frag.appendChild(el);
     }
-    // 展開的卡片：先放進去量高度，再排位置（一頁一次版面計算）
-    const width = cardWidth(pageW, CARD);
-    const cards: Array<{ id: string; el: HTMLElement }> = [];
+    // 展開的卡片：寬度照內容（最窄 `CARD.minWidth`，最寬到 `cardMaxWidth`，長的換行）。先全部放進去，一次量出寬高
+    // （一頁一次版面計算，量的時候還沒有位置：寬度寫明照內容，和放在哪裡無關），再排位置
+    // 卡片緊靠在標記旁邊（不蓋住標記，點標記才收得起來）：放大讀一欄時頁緣在畫面外，卡片跟著標記靠在那一欄旁邊
+    const screenW = this.o.scroll.clientWidth;
+    const cards: Array<{ id: string; el: HTMLElement; side: Side; top: number; edge?: number }> = [];
     for (const h of list) {
       if (!this.commentIsOpen(h.id)) continue;
+      const a = anchorOf.get(h.id);
+      const m = markOf.get(h.id);
+      const side = a ? sideOf(a, pageW) : ("right" as const);
+      const edge = m ? (side === "left" ? m.x + MARK_SIZE + MARK_GAP : m.x - MARK_GAP) : undefined;
       const el = this.commentCard(h);
-      el.style.width = `${width}px`;
+      const max = cardMaxWidth(edge === undefined ? { side } : { side, edge }, pageW, screenW, CARD);
+      el.style.minWidth = `${Math.min(CARD.minWidth, max)}px`;
+      el.style.maxWidth = `${max}px`;
       frag.appendChild(el);
-      cards.push({ id: h.id, el });
+      cards.push({ id: h.id, el, side, top: (a?.lineBottom ?? 0) + 4, ...(edge === undefined ? {} : { edge }) });
     }
     layer.appendChild(frag);
     if (cards.length === 0) return;
-    // 卡片緊靠在標記旁邊（不蓋住標記，點標記才收得起來）：放大讀一欄時頁緣在畫面外，卡片跟著標記靠在那一欄旁邊
-    const inputs = cards.map((c) => {
-      const a = anchorOf.get(c.id);
-      const m = markOf.get(c.id);
-      const side = a ? sideOf(a, pageW) : ("right" as const);
-      return {
-        id: c.id,
-        side,
-        top: (a?.lineBottom ?? 0) + 4,
-        height: c.el.offsetHeight,
-        ...(m ? { edge: side === "left" ? m.x + MARK_SIZE + MARK_GAP : m.x - MARK_GAP } : {}),
-      };
-    });
+    const inputs: CardInput[] = cards.map((c) => ({
+      id: c.id,
+      side: c.side,
+      top: c.top,
+      width: c.el.offsetWidth,
+      height: c.el.offsetHeight,
+      ...(c.edge === undefined ? {} : { edge: c.edge }),
+    }));
     const spots = new Map(placeCards(inputs, pageW, pageH, CARD).map((s) => [s.id, s]));
     for (const c of cards) {
       const s = spots.get(c.id);
       if (!s) continue;
+      // 寬度不寫回（offsetWidth 是取整的，寫回可能比原本窄一點而多換一行）：寬度照內容，和位置無關，高度就是量到的那個
       c.el.style.left = `${s.left}px`;
       c.el.style.top = `${s.top}px`;
     }

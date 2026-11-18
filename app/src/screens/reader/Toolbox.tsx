@@ -13,6 +13,7 @@ import { isBool, useLocalPref, useViewportSize } from "../../hooks";
 import { t } from "../../strings";
 import { m as Motion, useMotion } from "../../ui/motion";
 import { ChevronDownIcon, GripIcon, MinimizeIcon, PinIcon, ToolboxIcon } from "./toolIcons";
+import { clampFloat } from "./toolboxPlace";
 
 /**
  * 工具箱釘住（浮動時選了檢視也不收）：記在這台裝置上。工具箱的圖釘與設定頁的開關讀寫同一項，
@@ -111,17 +112,29 @@ export function Toolbox(props: {
     [landscape],
   );
 
-  // 把浮動的面板留在畫面裡（尺寸要等排版完才量得到）
+  // 把浮動的面板留在畫面裡（尺寸要等排版完才量得到）。位置讀樣式上寫的（不讀 getBoundingClientRect：
+  // 進場的縮放動畫途中量到的是縮小後的框）；寬高和位置無關（`.tb-float` 的 `width: max-content`），夾一次之後再夾不會再動
   useLayoutEffect(() => {
     const node = el.current;
     if (!node || layout.mode !== "floating") return;
     const r = node.getBoundingClientRect();
-    const top = inset("--inset-top");
-    const bottom = window.innerHeight - inset("--inset-bottom");
-    const left = clamp(r.left, 4, Math.max(4, window.innerWidth - r.width - 4));
-    const topPx = clamp(r.top, top + 4, Math.max(top + 4, bottom - r.height - 4));
-    node.style.left = `${left}px`;
-    node.style.top = `${topPx}px`;
+    const px = (v: string, fallback: number) => (Number.isFinite(parseFloat(v)) ? parseFloat(v) : fallback);
+    const at = clampFloat(
+      {
+        left: px(node.style.left, r.left),
+        top: px(node.style.top, r.top),
+        width: node.offsetWidth,
+        height: node.offsetHeight,
+      },
+      {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        insetTop: inset("--inset-top"),
+        insetBottom: inset("--inset-bottom"),
+      },
+    );
+    node.style.left = `${at.left}px`;
+    node.style.top = `${at.top}px`;
   });
 
   const onMove = useCallback(

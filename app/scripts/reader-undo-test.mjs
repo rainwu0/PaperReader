@@ -3,10 +3,18 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cardWidth, markerRoom, placeCards, placeMarkers, quoteHead, sideOf } from "../src/screens/reader/commentLayout.ts";
+import {
+  cardMaxWidth,
+  cardWidth,
+  markerRoom,
+  placeCards,
+  placeMarkers,
+  quoteHead,
+  sideOf,
+} from "../src/screens/reader/commentLayout.ts";
 import { lastOnPage, remapIds } from "../src/screens/reader/inkHistory.ts";
 
-const OPTS = { width: 260, inset: 6, gap: 6 };
+const OPTS = { width: 260, minWidth: 140, inset: 6, gap: 6 };
 
 test("標記放在靠近那一欄的頁緣：左欄放左邊，右欄與跨中線的放右邊", () => {
   assert.equal(sideOf({ left: 40, right: 160 }, 344), "left");
@@ -130,6 +138,85 @@ test("放大讀一欄：卡片靠齊標記的外緣，不靠在畫面外的頁�
 
 test("頁面很窄時卡片縮到頁寬扣掉邊距", () => {
   assert.equal(cardWidth(200, OPTS), 188);
+});
+
+test("卡片寬度照內容：量到多寬就多寬，右側的右緣仍靠齊標記", () => {
+  const spots = placeCards(
+    [
+      { id: "short", side: "right", top: 100, height: 70, width: 140, edge: 360 },
+      { id: "long", side: "right", top: 300, height: 200, width: 260, edge: 360 },
+    ],
+    396,
+    560,
+    OPTS,
+  );
+  const s = spots.find((x) => x.id === "short");
+  const l = spots.find((x) => x.id === "long");
+  assert.ok(s && l);
+  assert.equal(s.width, 140);
+  assert.equal(s.left + s.width, 360, "短的卡片右緣靠齊標記");
+  assert.equal(l.width, 260);
+  assert.equal(l.left + l.width, 360);
+});
+
+test("量到的高度不同的卡片互相讓位，用的是各自的高度", () => {
+  const spots = placeCards(
+    [
+      { id: "a", side: "right", top: 100, height: 40, width: 150, edge: 380 },
+      { id: "b", side: "right", top: 110, height: 180, width: 260, edge: 380 },
+      { id: "c", side: "right", top: 120, height: 40, width: 150, edge: 380 },
+    ],
+    396,
+    900,
+    OPTS,
+  );
+  const top = Object.fromEntries(spots.map((x) => [x.id, x.top]));
+  assert.equal(top.a, 100);
+  assert.equal(top.b, 100 + 40 + OPTS.gap);
+  assert.equal(top.c, top.b + 180 + OPTS.gap);
+});
+
+test("兩側都是窄卡片、左右不重疊時各排各的；寬的會重疊時當成同一欄", () => {
+  const narrow = placeCards(
+    [
+      { id: "l", side: "left", top: 100, height: 80, width: 140, edge: 28 },
+      { id: "r", side: "right", top: 100, height: 80, width: 140, edge: 368 },
+    ],
+    396,
+    560,
+    OPTS,
+  );
+  assert.deepEqual(
+    narrow.map((x) => x.top),
+    [100, 100],
+    "28+140 < 368−140：不互相讓",
+  );
+  const wide = placeCards(
+    [
+      { id: "l", side: "left", top: 100, height: 80, width: 260, edge: 28 },
+      { id: "r", side: "right", top: 100, height: 80, width: 260, edge: 368 },
+    ],
+    396,
+    560,
+    OPTS,
+  );
+  const [a, b] = [...wide].sort((x, y) => x.top - y.top);
+  assert.ok(a && b && b.top >= a.top + 80 + OPTS.gap, "寬的同一欄排，往下讓");
+});
+
+test("卡片的寬度上限：靠齊那一邊往頁面裡的空間、頁寬、畫面寬都不超過；太窄時用最窄", () => {
+  // 縮放 1 倍：右側的卡片從標記往左到頁緣有 300，最寬 260
+  assert.equal(cardMaxWidth({ side: "right", edge: 306 }, 396, 412, OPTS), 260);
+  // 右側標記靠左，往左只剩 200
+  assert.equal(cardMaxWidth({ side: "right", edge: 206 }, 396, 412, OPTS), 200);
+  // 左側從標記往右到頁緣
+  assert.equal(cardMaxWidth({ side: "left", edge: 250 }, 396, 412, OPTS), 140, "396−6−250 = 140");
+  // 放大後頁面比畫面寬：不超過畫面寬扣掉兩邊的邊距
+  assert.equal(cardMaxWidth({ side: "right", edge: 1200 }, 1600, 200, OPTS), 188);
+  // 旁邊的空間比最窄還窄：用最窄（排的時候夾回頁面裡）
+  assert.equal(cardMaxWidth({ side: "right", edge: 60 }, 396, 412, OPTS), 140);
+  // 頁面本身比最窄還窄：跟著頁寬
+  assert.equal(cardMaxWidth({ side: "right" }, 120, 412, OPTS), 108);
 });
 
 test("引句的開頭幾個字", () => {

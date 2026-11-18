@@ -94,6 +94,8 @@ export interface CardInput {
   top: number;
   /** 量到的卡片高度。 */
   height: number;
+  /** 量到的卡片寬度（照內容，已經在 `cardMaxWidth` 以內）。不給就用 `cardWidth` 的寬度。 */
+  width?: number;
   /**
    * 卡片靠齊的位置（知道時）：左側的是卡片左緣、右側的是卡片右緣，通常緊靠在標記旁邊（不蓋住標記）。放大讀一欄時頁緣在畫面外，
    * 卡片跟著標記靠在那一欄旁邊才看得到。不給就靠頁緣。
@@ -109,35 +111,53 @@ export interface CardSpot {
 }
 
 export interface CardOptions {
-  /** 卡片最寬多少（頁面窄時再縮）。 */
+  /** 卡片最寬多少（頁面窄、旁邊的空間不夠、畫面窄時再縮）。 */
   width: number;
-  /** 離頁緣多遠。 */
+  /** 卡片最窄多少（短的短評也放得下「編輯」「刪除」）。 */
+  minWidth: number;
+  /** 離頁緣（與畫面邊緣）多遠。 */
   inset: number;
   /** 卡片之間的間距。 */
   gap: number;
 }
 
-/** 卡片的寬度：頁面窄時縮到頁寬扣掉兩邊的邊距。 */
+/** 卡片在頁面上最寬能多寬：頁面窄時縮到頁寬扣掉兩邊的邊距。 */
 export function cardWidth(pageW: number, o: CardOptions): number {
   return Math.max(0, Math.min(o.width, pageW - 2 * o.inset));
 }
 
 /**
+ * 一張卡片的寬度上限（卡片的寬度照內容，短的窄、長的到這裡換行）：不超過 `o.width`；不超過靠齊的那一邊往頁面裡面
+ * 可用的寬度（右側的卡片從 `edge` 往左到頁緣、左側的從 `edge` 往右到頁緣）；放大後頁面比畫面寬時，也不超過畫面寬
+ * `screenW` 扣掉兩邊的邊距。旁邊的空間比 `o.minWidth` 還窄時用 `o.minWidth`（`placeCards` 會把它夾回頁面裡）。
+ */
+export function cardMaxWidth(c: Pick<CardInput, "side" | "edge">, pageW: number, screenW: number, o: CardOptions): number {
+  const page = cardWidth(pageW, o);
+  const room =
+    c.side === "left" ? pageW - o.inset - (c.edge ?? o.inset) : (c.edge ?? pageW - o.inset) - o.inset;
+  const max = Math.min(page, room, screenW - 2 * o.inset);
+  return Math.max(Math.min(o.minWidth, page), Math.floor(max));
+}
+
+/**
  * 展開的卡片放在哪裡：左側的靠左（或靠齊 `edge`）、右側的靠右（或靠齊 `edge`）；同一欄裡從上往下排，後面的往下讓，
  * 不疊在一起；排到頁尾放不下時整串往上推（推到頁首還放不下才超出頁尾）。左右兩側的卡片會左右重疊時（頁面窄），
- * 兩側當成同一欄排。
+ * 兩側當成同一欄排。每張卡片的寬度是量到的 `width`（沒給用 `cardWidth`），不超過頁寬扣掉邊距。
  */
 export function placeCards(cards: readonly CardInput[], pageW: number, pageH: number, o: CardOptions): CardSpot[] {
-  const width = cardWidth(pageW, o);
+  const full = cardWidth(pageW, o);
+  const widthOf = (c: CardInput) => Math.min(full, c.width ?? full);
   const lo = o.inset;
-  const hi = pageW - o.inset - width;
-  const leftOf = (c: CardInput) =>
-    Math.min(hi, Math.max(lo, c.side === "left" ? (c.edge ?? lo) : (c.edge ?? pageW - o.inset) - width));
+  const leftOf = (c: CardInput) => {
+    const w = widthOf(c);
+    const hi = pageW - o.inset - w;
+    return Math.min(hi, Math.max(lo, c.side === "left" ? (c.edge ?? lo) : (c.edge ?? pageW - o.inset) - w));
+  };
   const lefts = new Map(cards.map((c) => [c.id, leftOf(c)]));
-  const ls = cards.filter((c) => c.side === "left").map((c) => lefts.get(c.id) ?? lo);
-  const rs = cards.filter((c) => c.side === "right").map((c) => lefts.get(c.id) ?? hi);
+  const ls = cards.filter((c) => c.side === "left").map((c) => (lefts.get(c.id) ?? lo) + widthOf(c));
+  const rs = cards.filter((c) => c.side === "right").map((c) => lefts.get(c.id) ?? lo);
   // 左側最右邊的一張和右側最左邊的一張左右重疊：當成同一欄
-  const oneColumn = ls.length > 0 && rs.length > 0 && Math.max(...ls) + width > Math.min(...rs);
+  const oneColumn = ls.length > 0 && rs.length > 0 && Math.max(...ls) > Math.min(...rs);
   const columns: CardInput[][] = oneColumn
     ? [[...cards]]
     : [cards.filter((c) => c.side === "left"), cards.filter((c) => c.side === "right")];
@@ -173,7 +193,7 @@ export function placeCards(cards: readonly CardInput[], pageW: number, pageH: nu
     id: c.id,
     left: lefts.get(c.id) ?? lo,
     top: tops.get(c.id) ?? c.top,
-    width,
+    width: widthOf(c),
   }));
 }
 
