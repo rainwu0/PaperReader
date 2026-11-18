@@ -20,10 +20,6 @@ import java.security.MessageDigest
  * 條件不合時系統回 `STATUS_PENDING_USER_ACTION`，由 [InstallStatusReceiver] 打開系統的確認畫面。
  */
 object AppUpdate {
-    /** 系統安裝程式最後回報的狀態（`PackageInstaller.STATUS_*`）；畫面取一次就清掉。 */
-    @Volatile
-    var lastStatus: Int? = null
-
     private fun hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
@@ -130,7 +126,6 @@ object AppUpdate {
      * 這樣核對的就是系統要裝的那份內容，不是之前另外打開讀的那一次。
      */
     fun install(ctx: Context, file: File, sha256: String): Boolean {
-        lastStatus = null
         val installer = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(ctx.packageName)
@@ -167,6 +162,8 @@ object AppUpdate {
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
             val pending = PendingIntent.getBroadcast(ctx, id, intent, flags)
+            // 交給系統之前先記下這一次（回報可能馬上就到）
+            UpdateDiagnostics.begin(ctx, id, archiveInfo(ctx, file.path)?.let { versionCode(it) } ?: -1L)
             session.commit(pending.intentSender)
             session.close()
             return true
@@ -179,7 +176,8 @@ object AppUpdate {
 
 /**
  * 接系統安裝程式的回報（只收這個應用自己發的，manifest 裡 `exported="false"`）。
- * 要使用者確認時打開系統的確認畫面；其他結果記下來給畫面取。裝成功時這個應用會被系統結束，收不到成功。
+ * 要使用者確認時打開系統的確認畫面，記下確認畫面屬於誰；最終結果連同系統的原話寫進 [UpdateDiagnostics]，畫面從那裡讀。
+ * 裝成功時這個應用的程序會被系統結束，成功的回報可能送到一個新的程序，一樣寫進紀錄。
  */
 class InstallStatusReceiver : BroadcastReceiver() {
     companion object {
@@ -189,23 +187,32 @@ class InstallStatusReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) {
-                intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_INTENT)
-            }
-            if (confirm != null) {
-                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try {
-                    context.startActivity(confirm)
-                } catch (e: Exception) {
-                    AppUpdate.lastStatus = PackageInstaller.STATUS_FAILURE
-                    return
-                }
-            }
+        if (status != PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            UpdateDiagnostics.onStatus(context, intent, status)
+            return
         }
-        AppUpdate.lastStatus = status
+        val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+        val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_INTENT)
+        }
+        if (confirm == null) {
+            UpdateDiagnostics.finish(
+                context, sessionId, PackageInstaller.STATUS_FAILURE, "confirmation intent missing", null,
+            )
+            return
+        }
+        UpdateDiagnostics.confirming(context, sessionId, confirm)
+        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(confirm)
+        } catch (e: Exception) {
+            UpdateDiagnostics.finish(
+                context, sessionId, PackageInstaller.STATUS_FAILURE,
+                "could not open the confirmation screen: " + e.javaClass.simpleName, null,
+            )
+        }
     }
 }

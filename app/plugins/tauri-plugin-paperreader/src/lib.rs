@@ -104,12 +104,65 @@ pub struct ApkInfo {
     pub signer_readable: bool,
 }
 
-/// 系統安裝程式最後回報的結果（`PackageInstaller` 的狀態）。裝成功時應用會被系統結束，收不到成功。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstallStatus {
-    /// `PackageInstaller.STATUS_*` 的值（-1 等使用者確認、0 成功、1 以上失敗；3 是使用者取消）。
+/// 裝置與系統（應用內更新的診斷）。讀不到的欄位是 `None`；屬性沒設時是空字串。不含個人資料。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeviceInfo {
+    pub manufacturer: String,
+    pub brand: String,
+    pub model: String,
+    /// `Build.DISPLAY`（組建名稱）。
+    pub display: String,
+    /// `Build.VERSION.RELEASE`。
+    pub release: String,
+    pub sdk: i32,
+    pub incremental: String,
+    /// `ro.miui.ui.version.name`。
+    pub miui_version: Option<String>,
+    /// `ro.mi.os.version.name`（HyperOS）。
+    pub hyper_os_version: Option<String>,
+    /// `persist.sys.miui_optimization` 的原值；`0`／`false` 表示「MIUI 最佳化」關著。
+    pub miui_optimization: Option<String>,
+}
+
+/// 一次安裝的最終結果（系統的原話、確認畫面、環境資訊），平台轉接器存在應用私有空間的那一筆。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InstallReport {
+    /// `PackageInstaller.STATUS_*`：0 成功；1 失敗、2 被擋、3 中止、4 無效、5 衝突、6 空間不足、7 不相容、8 逾時。
     pub status: i32,
+    /// `EXTRA_STATUS_MESSAGE` 原文。
+    pub status_message: Option<String>,
+    /// 舊式代碼（`INSTALL_FAILED_*` 的數字），系統有給才有。
+    pub legacy_status: Option<i32>,
+    pub session_id: Option<i64>,
+    /// 交給系統、打開確認畫面、收到結果的時間（Unix 毫秒）。
+    pub commit_at: Option<i64>,
+    pub confirm_at: Option<i64>,
+    pub at: i64,
+    /// 要裝的 versionCode。
+    pub target_code: Option<i64>,
+    /// 確認意圖指向的套件、元件、動作。
+    pub confirm_package: Option<String>,
+    pub confirm_component: Option<String>,
+    pub confirm_action: Option<String>,
+    pub installed_name: Option<String>,
+    pub installed_code: Option<i64>,
+    /// 安裝者紀錄（`getInstallSourceInfo`）。
+    pub installer: Option<String>,
+    pub initiator: Option<String>,
+    pub can_request_installs: Option<bool>,
+    pub device: DeviceInfo,
+}
+
+/// 平台轉接器存的最新一筆結果，以及是不是還有一次交給系統、還沒有結果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InstallState {
+    pub report: Option<InstallReport>,
+    pub pending: bool,
+    /// 還沒有結果的那一次（狀態是 -1，`at` 是現在，附環境資訊）。
+    pub attempt: Option<InstallReport>,
 }
 
 /// 螢幕邊界（單位：CSS 像素，也就是 dp）：狀態列、瀏海、手勢列占掉的部分。
@@ -383,14 +436,23 @@ mod android_impl {
             Ok(raw.result)
         }
 
-        /// 系統安裝程式最後回報的結果（取一次就清掉）；還沒有回報是 `None`。
-        pub async fn install_status(&self) -> Result<Option<InstallStatus>> {
+        /// 最近一次安裝的最終結果（不取走），以及是不是還在等系統回報。
+        pub async fn install_status(&self) -> Result<InstallState> {
+            self.call("installStatus", Value::Null).await
+        }
+
+        pub async fn device_info(&self) -> Result<DeviceInfo> {
+            self.call("deviceInfo", Value::Null).await
+        }
+
+        /// 退路：把下載、核對過的安裝檔交給系統的安裝程式（`ACTION_VIEW`）。交回 `opened` 或 `no_app`。
+        pub async fn open_installer(&self, path: &str) -> Result<String> {
             #[derive(Deserialize)]
             struct Raw {
-                status: Option<i32>,
+                result: String,
             }
-            let raw: Raw = self.call("installStatus", Value::Null).await?;
-            Ok(raw.status.map(|status| InstallStatus { status }))
+            let raw: Raw = self.call("openInstaller", json!({ "path": path })).await?;
+            Ok(raw.result)
         }
 
         /// 開系統的「安裝不明應用程式」頁（只有這個應用的那一項）。

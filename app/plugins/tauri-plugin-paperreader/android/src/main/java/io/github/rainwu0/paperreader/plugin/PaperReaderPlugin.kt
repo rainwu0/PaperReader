@@ -922,11 +922,62 @@ class PaperReaderPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * 最近一次安裝的最終結果（系統的原話與環境資訊，[UpdateDiagnostics]），以及是不是還有一次交給系統、還沒有結果。
+     * 不取走：畫面每次打開都可以再讀，由外殼依下載的版本決定還要不要顯示。
+     */
     @Command
     fun installStatus(invoke: Invoke) {
+        updateQueue.execute {
+            val (report, attempt) = UpdateDiagnostics.latest(activity)
+            val ret = JSObject()
+            ret.put("report", report)
+            ret.put("pending", attempt != null)
+            ret.put("attempt", attempt)
+            invoke.resolve(ret)
+        }
+    }
+
+    /** 廠牌、系統版本與 MIUI／HyperOS 的屬性（「MIUI 最佳化」開著時，更新前先說明）。 */
+    @Command
+    fun deviceInfo(invoke: Invoke) {
+        updateQueue.execute {
+            val d = UpdateDiagnostics.device()
+            val ret = JSObject()
+            for (k in d.keys()) ret.put(k, d.get(k))
+            invoke.resolve(ret)
+        }
+    }
+
+    /**
+     * 退路「用系統安裝程式開啟」：把 `updates/` 裡核對過的那一份經檔案提供者交給系統的安裝程式
+     * （`ACTION_VIEW`，只授權讀這一個檔）。系統安裝程式的結果收不到；裝成時 PaperReader 會被結束，沒裝成時使用者回到這裡。
+     * 交回 opened 或 no_app。
+     */
+    @Command
+    fun openInstaller(invoke: Invoke) {
+        val args = invoke.parseArgs(PathArgs::class.java)
+        val file = AppUpdate.inUpdates(activity, args.path)
+        if (file == null) {
+            invoke.reject("not a downloaded update")
+            return
+        }
         val ret = JSObject()
-        ret.put("status", AppUpdate.lastStatus)
-        AppUpdate.lastStatus = null
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                activity, activity.packageName + ".fileprovider", file
+            )
+            val view = Intent(Intent.ACTION_VIEW)
+            view.setDataAndType(uri, "application/vnd.android.package-archive")
+            view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            activity.startActivity(view)
+            ret.put("result", "opened")
+        } catch (e: android.content.ActivityNotFoundException) {
+            ret.put("result", "no_app")
+        } catch (e: Exception) {
+            invoke.reject("cannot open installer")
+            return
+        }
         invoke.resolve(ret)
     }
 

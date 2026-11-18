@@ -50,6 +50,12 @@ android {
                 keyPassword = need("password")
                 storeFile = file(need("storeFile"))
                 storePassword = need("password")
+                // v1＋v2＋v3（小米開發者文件建議三種都簽）。`app/scripts/release-android.ps1`
+                // 建好之後再用 apksigner 明確以三種重簽並檢查。檢查 v1 要加 `--min-sdk-version 23`：minSdk 24 時
+                // `apksigner verify` 預設不驗 v1、一律印 false。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }

@@ -8,6 +8,7 @@ PaperReader keeps your data on your own device. The core features never touch th
 
 - Your library is ordinary folders and files on your device (on Android, by default `Documents/PaperReader`): paper PDFs, translations, key notes, highlights, drawings, notes (Markdown files), reference lists and reading history. You can open them with a file manager or other tools.
 - App settings, translation service settings, prompt presets and your glossary are kept in the app-specific storage, not in the library; they are deleted when you uninstall the app.
+- The results of the last few in-app update installs (the system's message and status code, phone model and system version, installer record) are also kept in the app-specific storage, only to show the reason when an update fails. They are never sent anywhere; they go to the clipboard only when you tap "複製錯誤資訊" (copy error details).
 - Backup files and sync packages are files you export yourself, save where you choose and move yourself. They are unencrypted zip files containing your library (papers, notes, highlights, reading history); anyone who gets the file can open it, so keep them as carefully as the library itself. API keys and app settings are not included.
 - The app turns off Android's system backup and device-to-device transfer, so your library is not silently copied to the cloud.
 - The project runs no server and has no account system.

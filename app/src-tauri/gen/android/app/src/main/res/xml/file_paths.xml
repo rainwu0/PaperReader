@@ -7,4 +7,6 @@
   <external-files-path name="notes_private" path="PaperReader/notes/" />
   <!-- 匯出的備份檔先放在這裡，交給系統的分享畫面用 -->
   <cache-path name="exports" path="exports/" />
+  <!-- 應用內更新失敗時的退路「用系統安裝程式開啟」：只開放下載、核對過的安裝檔所在的 updates/ -->
+  <cache-path name="updates" path="updates/" />
 </paths>

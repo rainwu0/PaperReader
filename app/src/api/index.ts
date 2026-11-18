@@ -83,7 +83,7 @@ import type {
   RemovedMaterialEntry,
   PurgeReport,
   UpdateAvailable,
-  UpdateInstallStatus,
+  InstallResult,
   UpdatePatch,
   UpdateStatus,
 } from "./types";
@@ -350,7 +350,12 @@ export const api = {
   updateDownloadCancel: () => call<void>("update_download_cancel"),
   /** 交給系統安裝：`needs_permission`（要先允許「安裝不明應用程式」）或 `committed`。 */
   updateInstall: () => call<"needs_permission" | "committed">("update_install"),
-  updateInstallStatus: () => call<UpdateInstallStatus>("update_install_status"),
+  /** 系統對這一份下載的最近一次結果（存在應用私有空間，畫面重開也讀得到）。 */
+  updateInstallStatus: () => call<InstallResult>("update_install_status"),
+  /** 退路：把核對過的安裝檔交給系統的安裝程式。結果收不到；`opened` 或 `no_app`。 */
+  updateOpenInstaller: () => call<"opened" | "no_app">("update_open_installer"),
+  /** 「複製錯誤資訊」：只放到剪貼簿。 */
+  updateCopyReport: (text: string) => call<void>("update_copy_report", { text }),
   updateOpenInstallSettings: () => call<void>("update_open_install_settings"),
   updateDiscard: () => call<void>("update_discard"),
 

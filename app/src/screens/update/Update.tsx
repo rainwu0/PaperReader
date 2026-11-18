@@ -4,8 +4,8 @@
 // 行動數據下先說大小再下載。第一次更新要允許「安裝不明應用程式」：說明、帶到系統頁，回到前景接著裝。
 // 交給系統之後應用會被系統結束（裝好要再打開），所以按「更新」之前就說。
 
-import { useRef, useState } from "react";
-import { api, kindOf, type ErrorKind } from "../../api";
+import { useEffect, useRef, useState } from "react";
+import { api, kindOf, type ErrorKind, type InstallReport } from "../../api";
 import { useAlive, useForeground, usePoll } from "../../hooks";
 import type { Nav, SheetKind } from "../../nav";
 import { t } from "../../strings";
@@ -15,6 +15,8 @@ import { updates, useUpdates } from "../../updates";
 import { ProgressBar } from "../generate/JobProgress";
 import { Section, SettingRow, SwitchRow } from "../settings/parts";
 import { formatBytes } from "../settings/useBackup";
+import { InstallFailure } from "./InstallFailure";
+import { isFailure, type FailureOutcome } from "./installReport";
 
 type Phase = "idle" | "checking" | "downloading" | "installing" | "waiting";
 
@@ -31,9 +33,12 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<ErrorKind | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ outcome: FailureOutcome; report: InstallReport } | null>(null);
   const cancelled = useRef(false);
   // 去系統頁允許「安裝不明應用程式」了：回到前景接著裝
   const waitingGrant = useRef(false);
+  // 交給系統的安裝程式了（退路）：回到前景表示沒有裝上（裝上時應用會被結束）
+  const waitingInstaller = useRef(false);
 
   const fresh = () => {
     setError(null);
@@ -41,19 +46,29 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
   };
 
   usePoll(phase === "downloading", () => updates.refresh().then(() => {}), 400, 0);
-  // 交給系統之後：使用者在確認畫面按了取消、或系統沒裝成，才會回到這裡（裝成功時應用已被結束）
+  // 交給系統之後：系統沒裝成（或確認畫面按了取消）才會回到這裡（裝成功時應用已被結束）。
+  // 結果由平台轉接器存在應用私有空間，所以程序在確認畫面時被結束、重開這一頁也讀得到（下面打開時讀一次）。
   usePoll(
     phase === "waiting",
     async () => {
-      const st = await api.updateInstallStatus().catch(() => "waiting" as const);
-      if (!alive.current || st === "waiting") return;
+      const r = await api.updateInstallStatus().catch(() => null);
+      if (!alive.current || !r || !isFailure(r.outcome) || !r.report) return;
+      // 「系統沒有回報」只在使用者回到這一頁之後才說（還在系統的確認畫面時，PaperReader 在背景）
+      if (r.outcome === "stalled" && document.visibilityState !== "visible") return;
       setPhase("idle");
-      if (st === "cancelled") setInfo(t("update.installCancelled"));
-      else setError("UpdateInstall");
+      setFailure({ outcome: r.outcome, report: r.report });
       return true;
     },
     1000,
   );
+  useEffect(() => {
+    void api
+      .updateInstallStatus()
+      .then((r) => {
+        if (alive.current && isFailure(r.outcome) && r.report) setFailure({ outcome: r.outcome, report: r.report });
+      })
+      .catch(() => {});
+  }, [alive]);
 
   const check = async () => {
     fresh();
@@ -107,6 +122,7 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
   /** 交給系統。`afterGrant`：剛從系統的授權頁回來，還是沒允許就說明，不再開說明框。 */
   const install = async (afterGrant = false) => {
     fresh();
+    setFailure(null);
     setPhase("installing");
     try {
       const r = await api.updateInstall();
@@ -128,6 +144,7 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
 
   const download = async () => {
     fresh();
+    setFailure(null);
     cancelled.current = false;
     setPhase("downloading");
     try {
@@ -169,7 +186,30 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
     });
   };
 
+  /** 退路：把核對過的同一個檔交給系統的安裝程式。結果收不到，回到前景時照已安裝的版本說。 */
+  const openInstaller = async () => {
+    fresh();
+    try {
+      const r = await api.updateOpenInstaller();
+      if (!alive.current) return;
+      if (r === "no_app") setInfo(t("update.installer.noApp"));
+      else waitingInstaller.current = true;
+    } catch (e) {
+      if (!alive.current) return;
+      setError(kindOf(e));
+      await updates.refresh();
+    }
+  };
+
   useForeground(() => {
+    if (waitingInstaller.current) {
+      // 裝上了的話應用已被系統結束、不會回到這裡
+      waitingInstaller.current = false;
+      void updates.refresh().then(() => {
+        if (alive.current) setInfo(t("update.installer.back"));
+      });
+      return;
+    }
     if (!waitingGrant.current) return;
     waitingGrant.current = false;
     void install(true);
@@ -241,6 +281,11 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
                   <p className="muted small">{t("update.size", { size: formatBytes(a.size) })}</p>
                   <p className="license-text">{a.notes || t("update.notes.empty")}</p>
                   <p className="muted small">{t("update.closes")}</p>
+                  {s.miuiOptimized ? (
+                    <p className="muted small" data-testid="update-miui">
+                      {t("update.miui")}
+                    </p>
+                  ) : null}
                   {phase === "downloading" ? (
                     <div role="status" data-testid="update-progress">
                       <p>
@@ -271,6 +316,21 @@ export function Update(props: { nav: Nav; sheet: SheetKind | null }) {
                       ) : null}
                     </div>
                   )}
+                  {phase === "idle" && failure && s.downloaded === a.version ? (
+                    <InstallFailure
+                      outcome={failure.outcome}
+                      report={failure.report}
+                      target={a.version}
+                      onOpenInstaller={() => void openInstaller()}
+                    />
+                  ) : null}
+                  {phase === "idle" && !failure && error === "UpdateInstall" && s.downloaded === a.version ? (
+                    <div className="actions">
+                      <Button block onClick={() => void openInstaller()}>
+                        {t("update.installer")}
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               </section>
             ) : null}

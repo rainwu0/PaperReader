@@ -498,8 +498,16 @@ impl<R: Runtime> PaperReader<R> {
         Err(Error::Unsupported)
     }
 
-    pub async fn install_status(&self) -> Result<Option<InstallStatus>> {
-        Ok(None)
+    pub async fn install_status(&self) -> Result<InstallState> {
+        Ok(InstallState::default())
+    }
+
+    pub async fn device_info(&self) -> Result<DeviceInfo> {
+        Err(Error::Unsupported)
+    }
+
+    pub async fn open_installer(&self, _path: &str) -> Result<String> {
+        Err(Error::Unsupported)
     }
 
     pub async fn open_install_settings(&self) -> Result<()> {

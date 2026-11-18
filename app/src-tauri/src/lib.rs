@@ -183,6 +183,8 @@ pub fn run() {
             commands::update::update_download_cancel,
             commands::update::update_install,
             commands::update::update_install_status,
+            commands::update::update_open_installer,
+            commands::update::update_copy_report,
             commands::update::update_open_install_settings,
             commands::update::update_discard,
             commands::app::startup_notice,

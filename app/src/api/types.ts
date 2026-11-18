@@ -823,6 +823,8 @@ export interface UpdateStatus {
   host: string;
   /** 現在是不是不計流量的網路；查不到時 `null`。 */
   unmetered: boolean | null;
+  /** 小米而且「MIUI 最佳化」開著：按「更新」前先說明可能被系統中止。 */
+  miuiOptimized: boolean;
 }
 
 export interface UpdatePatch {
@@ -832,8 +834,64 @@ export interface UpdatePatch {
   dismissed?: string;
 }
 
-/** 系統安裝程式最後回報的結果。裝成功時應用會被系統結束，所以沒有「成功」。 */
-export type UpdateInstallStatus = "waiting" | "failed" | "cancelled";
+/**
+ * 系統安裝程式對這一份下載的最近一次結果（`commands/update.rs` 的 `outcome`）。裝成功時應用會被系統結束，所以沒有「成功」。
+ * `waiting`：交給系統了、還沒有結果；`none`：沒有要說的；`stalled`：系統一直沒有回報（報告的狀態是 -1）；
+ * `cancelled`：使用者在確認畫面按了取消；其餘是各種失敗。
+ */
+export type InstallOutcome =
+  | "waiting"
+  | "none"
+  | "stalled"
+  | "cancelled"
+  | "aborted"
+  | "invalid"
+  | "conflict"
+  | "storage"
+  | "incompatible"
+  | "blocked"
+  | "timeout"
+  | "failed";
+
+/** 裝置與系統（讀不到的欄位是 null 或沒有）。 */
+export interface DeviceInfo {
+  manufacturer: string;
+  brand: string;
+  model: string;
+  display: string;
+  release: string;
+  sdk: number;
+  incremental: string;
+  miuiVersion?: string | null;
+  hyperOsVersion?: string | null;
+  miuiOptimization?: string | null;
+}
+
+/** 一次安裝的系統原話與環境資訊（平台轉接器存在應用私有空間，不送出）。時間是 Unix 毫秒。 */
+export interface InstallReport {
+  status: number;
+  statusMessage?: string | null;
+  legacyStatus?: number | null;
+  sessionId?: number | null;
+  commitAt?: number | null;
+  confirmAt?: number | null;
+  at: number;
+  targetCode?: number | null;
+  confirmPackage?: string | null;
+  confirmComponent?: string | null;
+  confirmAction?: string | null;
+  installedName?: string | null;
+  installedCode?: number | null;
+  installer?: string | null;
+  initiator?: string | null;
+  canRequestInstalls?: boolean | null;
+  device: DeviceInfo;
+}
+
+export interface InstallResult {
+  outcome: InstallOutcome;
+  report: InstallReport | null;
+}
 
 // ---------- 翻譯（產生） ----------
 

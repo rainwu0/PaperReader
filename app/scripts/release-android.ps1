@@ -1,5 +1,5 @@
-# 建正式版的 Android 安裝檔：每個架構一個（arm64 給大部分手機，x86_64 給模擬器與少數裝置），用你自己的金鑰簽章，
-# 核對簽章，印出大小與 SHA-256，複製到 app\target\release-apk\（連同 SHA256SUMS.txt，可以直接放上 GitHub Releases）。
+# 建正式版的 Android 安裝檔：每個架構一個（arm64 給大部分手機，x86_64 給模擬器與少數裝置），用你自己的金鑰以
+# v1＋v2＋v3 三種方式簽章，檢查 16 KB 對齊與三種簽章，印出大小與 SHA-256，複製到 app\target\release-apk\（連同 SHA256SUMS.txt，可以直接放上 GitHub Releases）。
 #
 # 用法（在任何位置）：
 #   pwsh -NoProfile -File app\scripts\release-android.ps1                      兩個架構都建
@@ -68,6 +68,8 @@ $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME 'build-tools') -Directo
     Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } | Select-Object -Last 1
 $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
 if (-not (Test-Path $apksigner)) { throw "找不到 apksigner：$apksigner" }
+$zipalign = Join-Path $buildTools.FullName 'zipalign.exe'
+if (-not (Test-Path $zipalign)) { throw "找不到 zipalign：$zipalign" }
 
 $version = $publicVersion   # 對外的版號（上面算好的）
 $abiOf = @{ aarch64 = 'arm64'; x86_64 = 'x86_64' }
@@ -84,11 +86,18 @@ Write-Host "=== 建置正式版 $version：$($Targets -join '、') ==="
 & npx @buildArgs
 if ($LASTEXITCODE -ne 0) { Write-Host '建置失敗（輸出在上面）'; exit 1 }
 
-# ---------- 4. 核對簽章、複製、算雜湊 ----------
+# ---------- 4. 重簽（v1＋v2＋v3）、檢查對齊與簽章、複製、算雜湊 ----------
+# 三種簽章方式都簽（小米開發者文件的建議）。Gradle 的設定也開了三種，這裡再用 apksigner 明確重簽，
+# 讓結果不靠外掛的預設：先 zipalign（原生程式庫照 16 KB 對齊），再簽，再檢查對齊與三種簽章，任何一項不過就停。
+# 金鑰的路徑與別名取自 keystore.properties；密碼只經由這個程序的環境變數交給 apksigner，不印、不寫進任何檔案。
 $outDir = Join-Path $app 'target\release-apk'
 New-Item -ItemType Directory -Force $outDir | Out-Null
+$work = Join-Path $app 'target\release-apk\work'
+New-Item -ItemType Directory -Force $work | Out-Null
 $sums = @()
 $failed = $false
+$env:PR_RELEASE_KS_PASS = $fields['password']
+try {
 foreach ($t in $Targets) {
     $abi = $abiOf[$t]
     $dir = Join-Path $android "app\build\outputs\apk\$abi\release"
@@ -97,25 +106,56 @@ foreach ($t in $Targets) {
     if ($apk.Name -like '*unsigned*') { Write-Host "安裝檔沒有簽章：$($apk.FullName)（檢查 keystore.properties）"; $failed = $true; continue }
 
     Write-Host ''
+    Write-Host "=== 重簽（v1＋v2＋v3）：$abi ==="
+    $aligned = Join-Path $work "$abi-aligned.apk"
+    $signed = Join-Path $work "$abi-signed.apk"
+    Remove-Item $aligned, $signed -ErrorAction SilentlyContinue
+    & $zipalign -f -P 16 4 $apk.FullName $aligned
+    if ($LASTEXITCODE -ne 0) { Write-Host "zipalign 失敗：$($apk.FullName)"; $failed = $true; continue }
+    & $apksigner sign --ks $storeFile --ks-key-alias $fields['keyAlias'] `
+        --ks-pass env:PR_RELEASE_KS_PASS --key-pass env:PR_RELEASE_KS_PASS `
+        --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true `
+        --out $signed $aligned
+    if ($LASTEXITCODE -ne 0) { Write-Host "重簽失敗：$abi"; $failed = $true; continue }
+
+    Write-Host "=== 檢查對齊（zipalign -c -P 16）：$abi ==="
+    $align = & $zipalign -c -P 16 -v 4 $signed 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $align | Where-Object { $_ -notmatch '\(OK' } | ForEach-Object { Write-Host "  $_" }
+        Write-Host "對齊檢查沒過：$signed"
+        $failed = $true
+        continue
+    }
+    $align | Select-Object -Last 1 | ForEach-Object { Write-Host "  $_" }
+
     Write-Host "=== 核對簽章：$abi ==="
-    $verify = & $apksigner verify --verbose --print-certs $apk.FullName 2>&1
+    # --min-sdk-version 23：minSdk 24 以上時 apksigner 預設不檢查 v1，指定 23 才會連 v1 一起驗
+    $verify = & $apksigner verify --verbose --print-certs --min-sdk-version 23 $signed 2>&1
     if ($LASTEXITCODE -ne 0) {
         $verify | ForEach-Object { Write-Host "  $_" }
-        Write-Host "簽章核對失敗：$($apk.FullName)"
+        Write-Host "簽章核對失敗：$signed"
         $failed = $true
         continue
     }
     $verify | Where-Object { $_ -match '^Verifie[sd]|^Verified using|certificate DN|certificate SHA-256 digest|^Number of signers' } |
         ForEach-Object { Write-Host "  $_" }
+    $missing = foreach ($n in 1, 2, 3) {
+        if (-not ($verify | Where-Object { $_ -match "^Verified using v$n scheme.*: true" })) { "v$n" }
+    }
+    if ($missing) { Write-Host "簽章方式不齊（少了 $($missing -join '、')）：$signed"; $failed = $true; continue }
 
     $name = "PaperReader-$version-$abi.apk"
     $dest = Join-Path $outDir $name
-    Copy-Item $apk.FullName $dest -Force
+    Copy-Item $signed $dest -Force
     $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
     $size = (Get-Item $dest).Length
     $sums += "$hash  $name"
     Write-Host ("  {0}：{1:N0} 位元組（{2:N1} MB）" -f $name, $size, ($size / 1MB))
     Write-Host "  SHA-256：$hash"
+}
+} finally {
+    Remove-Item Env:\PR_RELEASE_KS_PASS -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
 if ($sums.Count -gt 0) {
     $sumFile = Join-Path $outDir 'SHA256SUMS.txt'

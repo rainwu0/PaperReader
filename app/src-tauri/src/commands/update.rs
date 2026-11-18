@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_paperreader::{ApkInfo, PaperReaderExt};
+use tauri_plugin_paperreader::{ApkInfo, DeviceInfo, InstallReport, InstallState, PaperReaderExt};
 
 /// 快取裡放下載的安裝檔的資料夾。
 pub fn updates_dir(cache: &Path) -> PathBuf {
@@ -129,6 +129,8 @@ pub struct UpdateStatus {
     pub host: &'static str,
     /// 現在是不是不計流量的網路（行動數據下先說大小再下載）；查不到時 `None`。
     pub unmetered: Option<bool>,
+    /// 小米而且「MIUI 最佳化」開著（[`miui_optimized`]）：按「更新」前先說明。
+    pub miui_optimized: bool,
 }
 
 #[derive(Serialize, Clone, Copy)]
@@ -194,6 +196,12 @@ pub async fn update_status(
             .await
             .ok()
             .map(|n| n.unmetered),
+        miui_optimized: supported
+            && app
+                .paperreader()
+                .device_info()
+                .await
+                .is_ok_and(|d| miui_optimized(&d)),
     })
 }
 
@@ -456,21 +464,19 @@ pub async fn update_download_cancel(slot: State<'_, Arc<UpdateSlot>>) -> ApiResu
     Ok(())
 }
 
-/// 把核對過的那一份交給系統安裝。裝之前再核對一次（SHA-256 與簽章），快取裡的檔被換掉也不會裝上；
-/// 寫進系統安裝 session時平台轉接器再邊寫邊算一次 SHA-256，核對的就是系統要裝的那份內容。
-/// 下載進行中不裝（同一個資料夾正在被換掉）。沒同意不裝。
-/// 交回 `needs_permission`（還沒允許「安裝不明應用程式」）或 `committed`。
-#[tauri::command]
-pub async fn update_install(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    slot: State<'_, Arc<UpdateSlot>>,
-) -> ApiResult<String> {
+/// 交給系統之前的核對（安裝與「用系統安裝程式開啟」共用）：有同意、不在下載中（同一個資料夾正在被換掉）、
+/// 有核對過的那一份，再算一次 SHA-256、再核對一次簽章（快取裡的檔被換掉也不會裝上）。不符就刪掉下載的檔。
+async fn checked_download(
+    app: &AppHandle,
+    state: &AppState,
+    slot: &UpdateSlot,
+    command: &str,
+) -> ApiResult<(PathBuf, Ready)> {
     require_consent(&state.update_settings_get())?;
     if slot.running.load(Ordering::SeqCst) {
         return Err(ApiError::new(ErrorKind::TranslateBusy, "downloading"));
     }
-    let dir = updates_dir(&cache_dir(&app)?);
+    let dir = updates_dir(&cache_dir(app)?);
     let r = read_ready(&dir).ok_or_else(|| ApiError::new(ErrorKind::NotFound, "no download"))?;
     let apk = dir.join(&r.name);
     let p = apk.clone();
@@ -482,10 +488,24 @@ pub async fn update_install(
         discard(&dir);
         return Err(ApiError::new(ErrorKind::UpdateChecksum, "changed in cache"));
     }
-    if let Err(e) = verify_apk(&app, &apk, r.code).await {
+    if let Err(e) = verify_apk(app, &apk, r.code).await {
         discard(&dir);
-        return Err(e.log("update_install"));
+        return Err(e.log(command));
     }
+    Ok((apk, r))
+}
+
+/// 把核對過的那一份交給系統安裝（交給之前的核對見 [`checked_download`]）。
+/// 寫進系統安裝 session時平台轉接器再邊寫邊算一次 SHA-256，核對的就是系統要裝的那份內容。
+/// 交回 `needs_permission`（還沒允許「安裝不明應用程式」）或 `committed`。
+#[tauri::command]
+pub async fn update_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    slot: State<'_, Arc<UpdateSlot>>,
+) -> ApiResult<String> {
+    let (apk, r) = checked_download(&app, &state, &slot, "update_install").await?;
+    let dir = updates_dir(&cache_dir(&app)?);
     let result = app
         .paperreader()
         .install_apk(&apk.display().to_string(), &r.sha256)
@@ -501,18 +521,155 @@ pub async fn update_install(
     Ok(result)
 }
 
-/// 系統安裝程式最後回報的結果：`waiting`（還沒回報，或正等使用者在確認畫面按）、`failed`、`cancelled`。
-/// 裝成功時應用會被系統結束，所以收不到成功。
-#[tauri::command]
-pub async fn update_install_status(app: AppHandle) -> ApiResult<String> {
-    let s = app.paperreader().install_status().await?;
-    Ok(match s.map(|s| s.status) {
-        None | Some(-1) | Some(0) => "waiting",
-        // PackageInstaller.STATUS_FAILURE_ABORTED：使用者在確認畫面按了取消
-        Some(3) => "cancelled",
-        Some(_) => "failed",
+/// 這台是小米的系統（MIUI／HyperOS）：有它們的版本屬性，或廠牌是小米。
+pub fn is_xiaomi(d: &DeviceInfo) -> bool {
+    let set = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+    set(&d.miui_version)
+        || set(&d.hyper_os_version)
+        || d.manufacturer.eq_ignore_ascii_case("xiaomi")
+}
+
+/// 小米而且「MIUI 最佳化」開著（`persist.sys.miui_optimization` 為 `0`／`false` 才是關；
+/// 沒設或讀不到都當成開著，那是預設）。這時按「更新」前先說明可能被系統中止。
+pub fn miui_optimized(d: &DeviceInfo) -> bool {
+    is_xiaomi(d)
+        && !matches!(
+            d.miui_optimization.as_deref().map(str::trim),
+            Some("0") | Some("false")
+        )
+}
+
+/// 確認畫面停留多久以上，`User rejected permissions` 才可能是使用者自己按了取消（毫秒）。
+/// R14 的小米在確認畫面出現約 0.1 秒、沒有任何點按就回這個訊息。
+const DWELL_FOR_CANCEL_MS: i64 = 1500;
+
+/// 中止（`STATUS_FAILURE_ABORTED`）是不是使用者在確認畫面按了取消。
+/// 同一個訊息 `User rejected permissions` 也出現在確認畫面被系統關掉時，所以三項都要成立才算：訊息是它、
+/// 確認畫面停留夠久、確認畫面不是小米的安裝程式（也不是小米的系統）。小米上使用者按「安裝」之後也回同一個訊息，
+/// 分不出來，一律照實說「系統中止了安裝」。
+pub fn likely_user_cancel(r: &InstallReport) -> bool {
+    let rejected = r
+        .status_message
+        .as_deref()
+        .is_some_and(|m| m.contains("User rejected permissions"));
+    let dwell = r
+        .confirm_at
+        .is_some_and(|c| r.at - c >= DWELL_FOR_CANCEL_MS);
+    let vendor = r
+        .confirm_package
+        .as_deref()
+        .is_some_and(|p| p.starts_with("com.miui.") || p.starts_with("com.xiaomi."));
+    r.status == 3 && rejected && dwell && !vendor && !is_xiaomi(&r.device)
+}
+
+/// 交給系統之後（確認畫面打開之後）多久還沒有任何回報，就當成系統沒有回報（毫秒）。
+/// HyperOS 2 上確認畫面一閃就不見，也沒有回報。
+pub const STALLED_AFTER_MS: i64 = 30_000;
+
+/// 最近一次安裝的結果該怎麼說。`ready`：下載、核對過還沒裝的那一版的 versionCode；`installed`：已安裝的。
+/// 結果只在它屬於這一份下載、而且還沒裝上時才算（舊的、成功的、或已丟掉下載的，都是 `none`）。
+/// 交給系統後還沒有結果是 `waiting`；超過 [`STALLED_AFTER_MS`] 仍沒有是 `stalled`（系統沒有回報）。
+pub fn outcome(state: &InstallState, ready: Option<u64>, installed: Option<u64>) -> &'static str {
+    let Some(ready) = ready else {
+        return if state.pending { "waiting" } else { "none" };
+    };
+    if installed.is_some_and(|i| i >= ready) {
+        return "none";
     }
-    .to_string())
+    let this_download = |r: &InstallReport| {
+        !r.target_code
+            .is_some_and(|c| c > 0 && u64::try_from(c).ok() != Some(ready))
+    };
+    if state.pending {
+        return match &state.attempt {
+            Some(a)
+                if this_download(a)
+                    && a.at - a.confirm_at.or(a.commit_at).unwrap_or(a.at) >= STALLED_AFTER_MS =>
+            {
+                "stalled"
+            }
+            _ => "waiting",
+        };
+    }
+    let Some(r) = &state.report else {
+        return "none";
+    };
+    if !this_download(r) {
+        return "none";
+    }
+    match r.status {
+        0 => "none",
+        2 => "blocked",
+        3 if likely_user_cancel(r) => "cancelled",
+        3 => "aborted",
+        4 => "invalid",
+        5 => "conflict",
+        6 => "storage",
+        7 => "incompatible",
+        8 => "timeout",
+        _ => "failed",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallResult {
+    /// `waiting`（交給系統了，還沒有結果）、`none`（沒有要說的）、`stalled`（系統一直沒有回報）、
+    /// `cancelled`（使用者在確認畫面按了取消）、`aborted`、`invalid`、`conflict`、`storage`、`incompatible`、
+    /// `blocked`、`timeout`、`failed`。
+    pub outcome: &'static str,
+    /// 系統的原話與環境資訊（畫面顯示並讓使用者複製）。`stalled` 時是那一次的紀錄（狀態 -1）。
+    /// `none` 與 `waiting` 時沒有。
+    pub report: Option<InstallReport>,
+}
+
+/// 系統安裝程式對這一份下載的最近一次結果。平台轉接器把它存在應用私有空間，所以應用的程序在確認畫面時被結束、
+/// 或畫面重開，都還讀得到。裝成功時應用會被系統結束，所以畫面看不到成功。
+#[tauri::command]
+pub async fn update_install_status(
+    app: AppHandle,
+    slot: State<'_, Arc<UpdateSlot>>,
+) -> ApiResult<InstallResult> {
+    let st = app.paperreader().install_status().await?;
+    let ready = if slot.running.load(Ordering::SeqCst) {
+        None
+    } else {
+        read_ready(&updates_dir(&cache_dir(&app)?)).map(|r| r.code)
+    };
+    let installed = installed(&app).await.map(|(_, c)| c);
+    let outcome = outcome(&st, ready, installed);
+    let report = match outcome {
+        "none" | "waiting" => None,
+        "stalled" => st.attempt,
+        _ => st.report,
+    };
+    Ok(InstallResult { outcome, report })
+}
+
+/// 「複製錯誤資訊」：把畫面組好的那段純文字放到剪貼簿（只放剪貼簿，不送出任何地方）。
+#[tauri::command]
+pub async fn update_copy_report(app: AppHandle, text: String) -> ApiResult<()> {
+    app.paperreader()
+        .copy_text(&text, None)
+        .await
+        .map_err(|_| ApiError::new(ErrorKind::Io, "copy").log("update_copy_report"))
+}
+
+/// 退路「用系統安裝程式開啟」：核對過（同 [`update_install`]）之後，把那一份交給系統的安裝程式。
+/// 結果收不到：裝成時應用被結束；沒裝成時使用者回到應用，畫面照已安裝的版本判斷。交回 `opened` 或 `no_app`。
+#[tauri::command]
+pub async fn update_open_installer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    slot: State<'_, Arc<UpdateSlot>>,
+) -> ApiResult<String> {
+    let (apk, _) = checked_download(&app, &state, &slot, "update_open_installer").await?;
+    app.paperreader()
+        .open_installer(&apk.display().to_string())
+        .await
+        .map_err(|_| {
+            ApiError::new(ErrorKind::UpdateInstall, "open installer").log("update_open_installer")
+        })
 }
 
 /// 開系統的「安裝不明應用程式」頁（只有 PaperReader 那一項）。回到應用後由畫面接著裝。
@@ -682,6 +839,229 @@ mod tests {
         assert!(!stale_download(Some(f.code), Some(&f)));
         assert!(stale_download(Some(f.code), None));
         assert!(stale_download(Some(f.code), Some(&found("0.1.4"))));
+    }
+
+    fn pixel() -> DeviceInfo {
+        DeviceInfo {
+            manufacturer: "Google".into(),
+            brand: "google".into(),
+            model: "sdk_gphone64_x86_64".into(),
+            sdk: 36,
+            miui_version: Some(String::new()),
+            hyper_os_version: Some(String::new()),
+            miui_optimization: Some(String::new()),
+            ..DeviceInfo::default()
+        }
+    }
+
+    fn xiaomi(optimization: Option<&str>) -> DeviceInfo {
+        DeviceInfo {
+            manufacturer: "Xiaomi".into(),
+            brand: "Xiaomi".into(),
+            miui_version: Some("V140".into()),
+            hyper_os_version: Some(String::new()),
+            miui_optimization: optimization.map(Into::into),
+            ..DeviceInfo::default()
+        }
+    }
+
+    /// 「MIUI 最佳化」：只有 `0`／`false` 是關；沒設、讀不到都當成開著（預設）。不是小米一律不提示。
+    #[test]
+    fn miui_optimization_is_on_unless_explicitly_off() {
+        assert!(!miui_optimized(&pixel()));
+        assert!(miui_optimized(&xiaomi(Some(""))));
+        assert!(miui_optimized(&xiaomi(None)));
+        assert!(miui_optimized(&xiaomi(Some("true"))));
+        assert!(!miui_optimized(&xiaomi(Some("0"))));
+        assert!(!miui_optimized(&xiaomi(Some("false"))));
+        // 讀不到屬性、只知道廠牌：仍當成小米
+        let mut brand_only = pixel();
+        brand_only.manufacturer = "Xiaomi".into();
+        assert!(is_xiaomi(&brand_only));
+        // 只有 HyperOS 的屬性
+        let mut hyper = pixel();
+        hyper.hyper_os_version = Some("OS2.0.103".into());
+        assert!(is_xiaomi(&hyper));
+    }
+
+    fn report(status: i32, message: &str, dwell: Option<i64>) -> InstallReport {
+        InstallReport {
+            status,
+            status_message: Some(message.into()),
+            confirm_at: dwell.map(|d| 10_000 - d),
+            at: 10_000,
+            target_code: Some(1_000_300),
+            confirm_package: Some("com.google.android.packageinstaller".into()),
+            device: pixel(),
+            ..InstallReport::default()
+        }
+    }
+
+    fn state(r: InstallReport) -> InstallState {
+        InstallState {
+            report: Some(r),
+            pending: false,
+            attempt: None,
+        }
+    }
+
+    /// R16：確認畫面一閃就不見、系統一直沒有回報。交給系統（或打開確認畫面）超過 30 秒仍沒有結果才算，
+    /// 而且要是這一份下載的那一次。
+    #[test]
+    fn no_report_from_the_system_is_stalled_after_a_while() {
+        let ready = Some(1_000_300);
+        let inst = Some(1_000_201);
+        let pending = |since_confirm: Option<i64>, since_commit: i64, target: i64| InstallState {
+            report: None,
+            pending: true,
+            attempt: Some(InstallReport {
+                status: -1,
+                at: 100_000,
+                commit_at: Some(100_000 - since_commit),
+                confirm_at: since_confirm.map(|s| 100_000 - s),
+                target_code: Some(target),
+                ..InstallReport::default()
+            }),
+        };
+        assert_eq!(
+            outcome(&pending(Some(5_000), 6_000, 1_000_300), ready, inst),
+            "waiting"
+        );
+        assert_eq!(
+            outcome(&pending(Some(30_000), 31_000, 1_000_300), ready, inst),
+            "stalled"
+        );
+        // 確認畫面沒開過：從交給系統算
+        assert_eq!(
+            outcome(&pending(None, 45_000, 1_000_300), ready, inst),
+            "stalled"
+        );
+        assert_eq!(
+            outcome(&pending(None, 10_000, 1_000_300), ready, inst),
+            "waiting"
+        );
+        // 用戶在確認畫面待很久（從確認畫面打開算）
+        assert_eq!(
+            outcome(&pending(Some(10_000), 300_000, 1_000_300), ready, inst),
+            "waiting"
+        );
+        // 別的版本的那一次、已經裝上了、下載已丟掉
+        assert_eq!(
+            outcome(&pending(None, 45_000, 1_000_400), ready, inst),
+            "waiting"
+        );
+        assert_eq!(
+            outcome(&pending(None, 45_000, 1_000_300), ready, Some(1_000_300)),
+            "none"
+        );
+        assert_eq!(
+            outcome(&pending(None, 45_000, 1_000_300), None, inst),
+            "waiting"
+        );
+    }
+
+    const REJECTED: &str = "INSTALL_FAILED_ABORTED: User rejected permissions";
+
+    /// 中止不可以說成「你取消了」。只有訊息是 `User rejected permissions`、確認畫面停留夠久、
+    /// 而且不是小米的安裝程式時才算使用者取消；其餘一律「系統中止了安裝」。
+    #[test]
+    fn abort_is_cancel_only_when_the_user_could_have_pressed_cancel() {
+        let ready = Some(1_000_300);
+        let inst = Some(1_000_201);
+        assert_eq!(
+            outcome(&state(report(3, REJECTED, Some(4_000))), ready, inst),
+            "cancelled"
+        );
+        // R14：確認畫面出現約 0.1 秒就回同樣的訊息
+        assert_eq!(
+            outcome(&state(report(3, REJECTED, Some(100))), ready, inst),
+            "aborted"
+        );
+        // 不知道確認畫面什麼時候開的
+        assert_eq!(
+            outcome(&state(report(3, REJECTED, None)), ready, inst),
+            "aborted"
+        );
+        // session 被放棄
+        assert_eq!(
+            outcome(
+                &state(report(
+                    3,
+                    "INSTALL_FAILED_ABORTED: Session was abandoned",
+                    Some(4_000)
+                )),
+                ready,
+                inst
+            ),
+            "aborted"
+        );
+        // 小米的安裝程式：按「安裝」之後也回同樣的訊息，分不出來
+        let mut miui = report(3, REJECTED, Some(4_000));
+        miui.confirm_package = Some("com.miui.packageinstaller".into());
+        assert_eq!(outcome(&state(miui), ready, inst), "aborted");
+        let mut miui_rom = report(3, REJECTED, Some(4_000));
+        miui_rom.device = xiaomi(None);
+        assert_eq!(outcome(&state(miui_rom), ready, inst), "aborted");
+    }
+
+    /// 其他狀態各有自己的說法；舊的、成功的、別的版本的、已經裝上的、還在等的，都不顯示。
+    #[test]
+    fn outcome_only_reports_failures_of_this_download() {
+        let ready = Some(1_000_300);
+        let inst = Some(1_000_201);
+        let cases = [
+            (1, "failed"),
+            (2, "blocked"),
+            (4, "invalid"),
+            (5, "conflict"),
+            (6, "storage"),
+            (7, "incompatible"),
+            (8, "timeout"),
+            (99, "failed"),
+            (0, "none"),
+        ];
+        for (status, want) in cases {
+            assert_eq!(
+                outcome(&state(report(status, "x", Some(4_000))), ready, inst),
+                want,
+                "status {status}"
+            );
+        }
+        let failed = || state(report(4, "INSTALL_FAILED_INVALID_APK", None));
+        // 還在等系統回報
+        let mut waiting = failed();
+        waiting.pending = true;
+        assert_eq!(outcome(&waiting, ready, inst), "waiting");
+        // 沒有紀錄、沒有下載
+        assert_eq!(outcome(&InstallState::default(), ready, inst), "none");
+        assert_eq!(outcome(&failed(), None, inst), "none");
+        // 紀錄是另一版的
+        assert_eq!(outcome(&failed(), Some(1_000_400), inst), "none");
+        // 已經裝上了（例如之後用系統安裝程式裝成）
+        assert_eq!(outcome(&failed(), ready, Some(1_000_300)), "none");
+        // 讀不到要裝的版本：仍算這一份
+        let mut unknown = report(4, "x", None);
+        unknown.target_code = Some(-1);
+        assert_eq!(outcome(&state(unknown), ready, inst), "invalid");
+    }
+
+    /// 平台轉接器存的紀錄（Kotlin 寫的 JSON）讀得進來；缺的欄位是空的，不會整筆讀不懂。
+    #[test]
+    fn report_from_the_platform_parses() {
+        let json = r#"{"report":{"sessionId":7,"commitAt":1000,"targetCode":1000300,
+            "confirmAt":1200,"confirmPackage":"com.miui.packageinstaller","at":1300,"status":3,
+            "statusMessage":"INSTALL_FAILED_ABORTED: User rejected permissions","legacyStatus":-115,
+            "installedName":"0.1.2.1","installedCode":1000201,"installer":"com.android.packageinstaller",
+            "canRequestInstalls":true,"device":{"manufacturer":"Xiaomi","sdk":33,"miuiVersion":"V140"}},
+            "pending":false}"#;
+        let st: InstallState = serde_json::from_str(json).unwrap();
+        let r = st.report.as_ref().unwrap();
+        assert_eq!(r.legacy_status, Some(-115));
+        assert_eq!(r.device.miui_version.as_deref(), Some("V140"));
+        assert_eq!(r.device.miui_optimization, None);
+        assert_eq!(outcome(&st, Some(1_000_300), Some(1_000_201)), "aborted");
+        let empty: InstallState = serde_json::from_str(r#"{"pending":true}"#).unwrap();
+        assert!(empty.report.is_none() && empty.pending);
     }
 
     fn info(readable: bool, signer_readable: bool, same_signer: bool) -> ApkInfo {
