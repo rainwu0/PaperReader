@@ -6,7 +6,7 @@ import type { SegmentInput } from "../api";
 import { unlessStopped, type PdfSource } from "../pdf/pdfSource";
 import { layoutPages, type PageInput, type RawItem } from "./layout";
 import { detectRegions } from "./pageRegions";
-import { layoutWithRegions, type PageRegions } from "./regions";
+import { layoutWithRegions, modelPages, type PageRegions } from "./regions";
 
 /** PDF.js 一頁的文字內容 → `RawItem`（只留有文字的片段；標記內容的開頭結尾略過）。 */
 export function toRawItems(content: { items: readonly unknown[] }): RawItem[] {
@@ -61,8 +61,14 @@ export interface ModelStep {
   onPage: (done: number, total: number) => void;
 }
 
+/** 分好的段落，與依版面模型分段的頁（頁序；都照規則時是空的）。 */
+export interface Extracted {
+  segments: SegmentInput[];
+  modelPages: number[];
+}
+
 /**
- * 逐頁取文字、組成段落（`readPages` 加 `layoutPages`）。整份文件沒有任何文字（掃描版）交回空陣列。
+ * 逐頁取文字、組成段落（`readPages` 加 `layoutPages`）。整份文件沒有任何文字（掃描版）交回空的段落。
  * 給了 `model`：讀完文字再逐頁跑版面模型，依它的區塊分段（`regions.ts`）；模型或外殼出錯時照規則分段，
  * 照常交回段落。中途取消交回 `null`。
  */
@@ -72,7 +78,7 @@ export async function extractSegments(
   onPage: (done: number, total: number) => void,
   cancelled: () => boolean,
   model?: ModelStep,
-): Promise<SegmentInput[] | null> {
+): Promise<Extracted | null> {
   const pages = await readPages(src, pdf, onPage, cancelled);
   if (!pages) return null;
   let regions: PageRegions[] | null = null;
@@ -85,11 +91,12 @@ export async function extractSegments(
     }
     if (cancelled()) return null;
   }
-  return (regions ? layoutWithRegions(pages, regions) : layoutPages(pages)).map((s) => ({
+  const segments = (regions ? layoutWithRegions(pages, regions) : layoutPages(pages)).map((s) => ({
     page: s.page,
     bbox: s.bbox,
     kind: s.kind,
     size: s.size,
     source: s.source,
   }));
+  return { segments, modelPages: regions ? modelPages(pages.length, regions) : [] };
 }

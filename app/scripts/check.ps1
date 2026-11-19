@@ -35,6 +35,8 @@ if (-not (Test-Path 'node_modules')) {
 }
 
 $steps = @(
+    # 選用：有 scripts/check-extra.ps1 時先跑它，放各自環境另加的檢查
+    @{ Name = '額外的檢查';     Cmd = 'if (Test-Path scripts/check-extra.ps1) { pwsh -NoProfile -File scripts/check-extra.ps1 } else { Write-Host "略過：沒有 scripts/check-extra.ps1" }' },
     @{ Name = '介面型別檢查';   Cmd = 'npm run typecheck' },
     @{ Name = '介面靜態檢查';   Cmd = 'npm run lint' },
     @{ Name = '介面邏輯測試';   Cmd = 'npm run test:ui' },

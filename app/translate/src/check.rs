@@ -8,8 +8,10 @@
 //! - 漏翻：目標語言是中日韓文時，譯文幾乎沒有中日韓文字、又和原文差不多，視為沒翻。
 //! - 亂碼：出現替代字元（U+FFFD）。
 //! - 長度異常：譯文相對原文過短（可能被截斷或摘要）。
+//! - 指引沒翻：目標是中日韓文時，譯文裡留著「Section 4.2」「Fig. 1」這種英文的指引。
 //!
 //! 檢查結果分兩級：`Critical` 會讓工作把這一段單獨重翻一次；`Warning` 只記下來給使用者看。
+//! 數字不見是警告（換算過的寫法可能是對的），只有跟在章節、圖、表、式後面的編號不見算嚴重。
 
 use std::collections::BTreeMap;
 
@@ -29,6 +31,8 @@ pub enum IssueKind {
     Garbled,
     /// 譯文相對原文過短。
     TooShort,
+    /// 章節、圖、表、式的指引留著英文（「Section 4.2」「Fig. 1」）：目標是中日韓文時才查。
+    UntranslatedReference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,6 +58,7 @@ impl Issue {
             IssueKind::Untranslated => "untranslated",
             IssueKind::Garbled => "garbled",
             IssueKind::TooShort => "too_short",
+            IssueKind::UntranslatedReference => "untranslated_reference",
         }
     }
 }
@@ -100,6 +105,13 @@ pub fn check_segment(source: &str, target: &str, target_lang: &str) -> Vec<Issue
         });
     }
 
+    if cjk && !pointer_numbers(tgt).is_empty() {
+        out.push(Issue {
+            kind: IssueKind::UntranslatedReference,
+            severity: Severity::Warning,
+        });
+    }
+
     let tgt_norm = normalize_for_match(tgt);
     // 網址與 DOI 裡的數字由網址檢查負責，不重複算成數字
     let src_urls = urls(src);
@@ -107,10 +119,34 @@ pub fn check_segment(source: &str, target: &str, target_lang: &str) -> Vec<Issue
     for u in &src_urls {
         src_no_urls = src_no_urls.replace(u.as_str(), " ");
     }
-    for n in missing(&numbers(&src_no_urls), &numbers(&tgt_norm)) {
+    let pointers = pointer_numbers(&src_no_urls);
+    let src_numbers = numbers(&src_no_urls);
+    // 單一位數的編號（「(Section 4)」「Fig. 3」）不在一般的數字檢查裡，這裡另外比
+    let tgt_runs = digit_runs(&tgt_norm);
+    let mut single: Vec<&String> = pointers
+        .iter()
+        .filter(|p| !src_numbers.contains_key(*p))
+        .collect();
+    single.sort();
+    single.dedup();
+    for p in single {
+        if !tgt_runs.contains(p) {
+            out.push(Issue {
+                kind: IssueKind::MissingNumber(p.clone()),
+                severity: Severity::Critical,
+            });
+        }
+    }
+    for n in missing(&src_numbers, &numbers(&tgt_norm)) {
+        // 章節、圖、表、式的編號不見了：讀者找不到指的是哪裡，要重翻
+        let severity = if pointers.contains(&n) {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        };
         out.push(Issue {
             kind: IssueKind::MissingNumber(n),
-            severity: Severity::Warning,
+            severity,
         });
     }
     let tgt_cite = citation_form(&tgt_norm);
@@ -242,6 +278,56 @@ fn numbers(s: &str) -> BTreeMap<String, usize> {
             if !prev_alpha && (n.len() >= 2 || n.contains('.')) {
                 *out.entry(n).or_insert(0) += 1;
             }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// 跟在 Section、Sec.、Fig.、Figure、Table、Eq.、Equation 後面的編號（`Eq. (5)` 的括號也算）。
+fn pointer_numbers(s: &str) -> Vec<String> {
+    const WORDS: [&str; 7] = [
+        "Section", "Sec.", "Figure", "Fig.", "Table", "Equation", "Eq.",
+    ];
+    let mut out = Vec::new();
+    for w in WORDS {
+        for (i, _) in s.match_indices(w) {
+            if s[..i].chars().last().is_some_and(char::is_alphanumeric) {
+                continue;
+            }
+            let rest = s[i + w.len()..].trim_start_matches([' ', '\u{a0}', '~', '(']);
+            let n: String = rest
+                .char_indices()
+                .take_while(|(k, c)| {
+                    c.is_ascii_digit()
+                        || (*c == '.' && rest[k + 1..].starts_with(|d: char| d.is_ascii_digit()))
+                })
+                .map(|(_, c)| c)
+                .collect();
+            if !n.is_empty() {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+/// 文字裡每一串數字（可帶一個小數點），不論幾位數。
+fn digit_runs(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_ascii_digit()
+                    || (chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()))
+            {
+                i += 1;
+            }
+            out.push(chars[start..i].iter().collect());
         } else {
             i += 1;
         }
@@ -507,5 +593,62 @@ mod tests {
     #[test]
     fn empty_source_has_no_issues() {
         assert!(check_segment("  ", "", "zh-TW").is_empty());
+    }
+
+    #[test]
+    fn a_missing_section_figure_table_or_equation_number_is_critical() {
+        let src =
+            "We reach the goal across the state space (Section 4.2). See Fig. 12 and Table 10.";
+        let v = check_segment(src, "我們在狀態空間中達成目標。見圖 12 與表 10。", "zh-TW");
+        assert_eq!(codes(&v), vec!["missing_number"]);
+        assert!(has_critical(&v), "{v:?}");
+        let v = check_segment(
+            src,
+            "我們在狀態空間中達成目標（4.2 節）。見圖 12 與表 10。",
+            "zh-TW",
+        );
+        assert!(v.is_empty(), "{v:?}");
+        // 其他的數字仍然只是警告（正確的換算：6 億像素）
+        let v = check_segment(
+            "a 600 megapixel camera (Section 2)",
+            "6 億像素的相機（2 節）",
+            "zh-TW",
+        );
+        assert_eq!(codes(&v), vec!["missing_number"]);
+        assert!(!has_critical(&v));
+    }
+
+    #[test]
+    fn a_missing_single_digit_cross_reference_is_critical() {
+        let src = "Details are in (Section 4) and Fig. 3.";
+        let v = check_segment(src, "細節見圖。", "zh-TW");
+        assert!(has_critical(&v), "{v:?}");
+        assert_eq!(codes(&v), vec!["missing_number", "missing_number"]);
+        assert!(check_segment(src, "細節見 4 節與圖 3。", "zh-TW").is_empty());
+        // 其他的單一位數照舊不算
+        assert!(check_segment("We compare 3 models.", "我們比較三個模型。", "zh-TW").is_empty());
+    }
+
+    #[test]
+    fn a_cross_reference_word_left_in_english_is_a_warning() {
+        let src = "As shown in Equation (16) and Section 4.2, see Fig. 1.";
+        let v = check_segment(
+            src,
+            "如 Equation (16) 與 Section 4.2 所示，見 Fig. 1。",
+            "zh-TW",
+        );
+        assert_eq!(codes(&v), vec!["untranslated_reference"]);
+        assert!(!has_critical(&v));
+        assert!(check_segment(src, "如式 (16) 與 4.2 節所示，見圖 1。", "zh-TW").is_empty());
+        // 不是中日韓文的目標語言不查；後面沒有數字的不算
+        assert!(
+            check_segment(
+                src,
+                "Wie in Equation (16) und Section 4.2, siehe Fig. 1.",
+                "de"
+            )
+            .is_empty()
+        );
+        assert!(check_segment("The table is large.", "這個 Table 很大。", "zh-TW").is_empty());
     }
 }

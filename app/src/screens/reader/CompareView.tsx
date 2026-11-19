@@ -1,12 +1,13 @@
 // 譯文：一份譯文疊加檔的段落清單，兩種模式——
 //   閱讀：排好的中文全文（標題、正文、圖說），點一段在下面展開原文、看完再點收起；長按或展開後按「改」就地改；
+//         跨欄、跨頁被切開的同一句（接續）接成一段，夾在中間的圖說排在後面；
 //         目錄、字級、看版面（到譯本 PDF 的同一段）。不顯示自動檢查的警示。
 //   檢查（頁頂選單的「檢查譯文」，偶爾用）：一段原文配一段譯文、自動檢查的警示、只看有問題的、
 //         並排比較服務（單段重翻）、匯出給翻譯軟體。
 // 讀檔（閱讀畫面的 `useOverlayDoc`，和 PDF 上的小框、原頁疊譯文同一份）、捲動定位、改段落兩種模式共用。
 // 蓋滿整個畫面（導覽堆疊裡的一層，返回鍵先關掉它）；檢查、目錄、頁頂選單、正在改的那一段也各是一層。
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Nav, SheetKind } from "../../nav";
 import { api, type OverlaySegment, type TranslateSettingsView } from "../../api";
 import { useLocalPref } from "../../hooks";
@@ -18,7 +19,7 @@ import { m as Motion, useExitingStyle, useMotion } from "../../ui/motion";
 import { CompareServicesSheet, type CompareTarget } from "./CompareServices";
 import { OverlayTerms } from "./OverlayTerms";
 import { Paragraph, RebuildBar, SegmentEditor, type OverlayDoc, type Rebuild } from "./SegmentParts";
-import { editMark, tableOfContents } from "./segments";
+import { continuationsFor, editMark, readingUnits, tableOfContents } from "./segments";
 import { LayoutIcon, MoreIcon } from "./toolIcons";
 
 /** 自動檢查的問題代號 → 白話；不認得的代號用通用的說法。 */
@@ -30,6 +31,7 @@ const ISSUE_TEXT = {
   untranslated: "reader.compare.issue.untranslated",
   garbled: "reader.compare.issue.garbled",
   too_short: "reader.compare.issue.too_short",
+  untranslated_reference: "reader.compare.issue.untranslated_reference",
 } as const;
 
 function issueText(code: string): string {
@@ -78,6 +80,20 @@ export function CompareView(props: {
   // 使用者自己捲過（或從目錄跳過）才回報讀到哪：只是打開再關掉，PDF 停在原處不動
   const userMoved = useRef(false);
 
+  // 接續：閱讀模式把前後兩段接成一段；讀到哪、跳到哪都以接成的那段的第一段為準
+  const [cont, dispatch] = useReducer(continuationsFor, null, () => ({ overlayId: null, pairs: [] }));
+  const pairs = cont.pairs;
+  useEffect(() => {
+    const overlayId = props.overlayId;
+    dispatch({ type: "open", overlayId });
+    api
+      .overlayContinuations(props.paperId, overlayId)
+      .then((p) => dispatch({ type: "loaded", overlayId, pairs: p }))
+      .catch(() => dispatch({ type: "failed", overlayId }));
+  }, [props.paperId, props.overlayId]);
+  const units = useMemo(() => readingUnits(segs, pairs), [segs, pairs]);
+  const headOf = useMemo(() => new Map(units.flatMap((u) => u.map((s) => [s.id, u[0]?.id ?? s.id] as const))), [units]);
+
   // 返回鍵退掉了「改」那一層：放棄這次修改
   const editLayer = sheets.includes("segEdit");
   useEffect(() => {
@@ -99,7 +115,8 @@ export function CompareView(props: {
   /** 讓某一段出現在畫面頂端。 */
   const scrollToSeg = (id: string) => {
     const body = bodyRef.current;
-    const el = body?.querySelector<HTMLElement>(`[data-sid="${CSS.escape(id)}"]`);
+    const at = check ? id : (headOf.get(id) ?? id);
+    const el = body?.querySelector<HTMLElement>(`[data-sid="${CSS.escape(at)}"]`);
     if (body && el) body.scrollTop = el.offsetTop - 8;
   };
   // 第一次有內容時捲到開始的那一段
@@ -339,19 +356,25 @@ export function CompareView(props: {
             ))}
           </>
         ) : (
-          segs.map((s) => (
-            <Paragraph
-              key={s.id}
-              seg={s}
-              open={open === s.id}
-              editing={editing === s.id}
-              onToggle={() => setOpen((cur) => (cur === s.id ? null : s.id))}
-              onEdit={() => startEdit(s.id)}
-              onLayout={() => props.onLayout(s.id)}
-              onSave={(text) => save(s.id, text)}
-              onCancel={() => void nav.back()}
-            />
-          ))
+          // 正在改接續的其中一段：那幾段分開顯示，各自改得到
+          units
+            .flatMap((u) => (u.some((s) => s.id === editing) ? u.map((s) => [s]) : [u]))
+            .map(([s, ...rest]) =>
+              s ? (
+                <Paragraph
+                  key={s.id}
+                  seg={s}
+                  rest={rest}
+                  open={open === s.id}
+                  editing={editing === s.id}
+                  onToggle={() => setOpen((cur) => (cur === s.id ? null : s.id))}
+                  onEdit={() => startEdit(s.id)}
+                  onLayout={() => props.onLayout(s.id)}
+                  onSave={(text) => save(s.id, text)}
+                  onCancel={() => void nav.back()}
+                />
+              ) : null,
+            )
         )}
       </div>
       {!check && segs.length > 0 ? (

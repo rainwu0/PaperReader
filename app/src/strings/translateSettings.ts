@@ -170,6 +170,8 @@ export const translateSettingsStrings = {
   "translate.panel.noService": "沒有啟用的翻譯服務。",
   "translate.panel.refine": "第二輪潤飾",
   "translate.panel.refineCost": "譯完再請模型修順一次，費用約加倍",
+  "translate.panel.finalPass": "收尾重翻",
+  "translate.panel.finalPassAbout": "整篇譯完後，沒用到已定術語的段落再翻一次（最多一成的段落），全篇用詞一致；接著翻完也會再做一次",
   "translate.panel.start": "開始翻譯",
   "translate.panel.deeplGlossary": "選定原文語言，DeepL 才會套用術語庫",
   "translate.panel.external": "加入別處做好的譯本檔",

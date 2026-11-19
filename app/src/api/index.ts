@@ -336,10 +336,14 @@ export const api = {
   /** 逐段對照寫成 XLIFF 2.1 或 TMX 1.4b 的內容（接著用匯出的流程存檔）。 */
   overlayInterchange: (paperId: string, materialId: string, format: InterchangeFormat) =>
     call<{ name: string; text: string }>("overlay_interchange", { paperId, materialId, format }),
-  createOverlay: (paperId: string, sourceMaterial: string, segments: SegmentInput[], service: string) =>
-    call<{ materialId: string }>("overlay_create", { paperId, sourceMaterial, segments, service }),
+  /** `layoutModelPages`：依版面模型分段的頁（頁序）；只在這些頁上認跨欄、跨頁的接續。 */
+  createOverlay: (paperId: string, sourceMaterial: string, segments: SegmentInput[], layoutModelPages: number[], service: string) =>
+    call<{ materialId: string }>("overlay_create", { paperId, sourceMaterial, segments, layoutModelPages, service }),
   readOverlay: (paperId: string, materialId: string) =>
     call<OverlayFile>("overlay_read", { paperId, materialId }),
+  /** 跨欄、跨頁被切成前後兩段的句子（接續）：每一對是（前一段, 後一段）的代號。 */
+  overlayContinuations: (paperId: string, materialId: string) =>
+    call<Array<[string, string]>>("overlay_continuations", { paperId, materialId }),
   /** 開始（或接著）翻：只翻還沒翻好的段落，已翻的與使用者挑的不動。背景進行，立刻交回。 */
   translateRun: (paperId: string, materialId: string, service: string) =>
     call<void>("translate_run", { paperId, materialId, service }),

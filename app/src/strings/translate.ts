@@ -162,5 +162,6 @@ export const translateStrings = {
   "reader.compare.issue.untranslated": "可能沒有翻",
   "reader.compare.issue.garbled": "有亂碼",
   "reader.compare.issue.too_short": "譯文太短，可能漏了內容",
+  "reader.compare.issue.untranslated_reference": "章節、圖、表、式的指引留著英文",
   "reader.compare.issue.other": "自動檢查有疑點",
 } as const;

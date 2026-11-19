@@ -98,7 +98,8 @@ fn take(dst: &mut OverlaySegment, src: &OverlaySegment) {
     dst.modified_by = src.modified_by.clone();
 }
 
-/// 譯文疊加檔：頭的欄位留本機的；段落依代號逐段比。交回要寫的內容；不必寫是 `None`。
+/// 譯文疊加檔：頭的欄位留本機的（依版面模型分段的頁本機沒有記時用另一台的）；段落依代號逐段比。
+/// 交回要寫的內容；不必寫是 `None`。
 pub fn merge_overlay(
     local: &OverlayFile,
     remote: &OverlayFile,
@@ -179,6 +180,11 @@ pub fn merge_overlay(
             out.segments[i].modified_by = Some(ctx.device.clone());
             changed += 1;
         }
+    }
+    // 依版面模型分段的頁：建立時定下、之後不變，兩份照理相同；本機的沒有記（較舊的寫入）時用另一台的
+    if local.layout_model_pages.is_empty() && !remote.layout_model_pages.is_empty() {
+        out.layout_model_pages = remote.layout_model_pages.clone();
+        changed += 1;
     }
     // 這份譯本的術語：依原文詞合併，使用者的決定勝過學到的（`overlay::merge_terms`）
     let terms = crate::overlay::merge_terms(&local.terms, &remote.terms);

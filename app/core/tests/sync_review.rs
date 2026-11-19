@@ -416,6 +416,7 @@ fn l2_overlay_path_outside_package_not_read() {
         p.a.create_overlay(
             &alpha,
             paperreader_core::overlay::OverlayDraft {
+                layout_model_pages: Vec::new(),
                 source_material: mid,
                 provider: "x".into(),
                 model: "y".into(),

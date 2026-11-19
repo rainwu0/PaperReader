@@ -650,7 +650,7 @@ function splitParagraphs(ordered: Line[], gapMedian: number, bodyFont: string): 
 }
 
 /** 把下一行接在後面：行尾的連字號接回同一個字，中日韓的字之間不加空白。 */
-function joinText(s: string, next: string): string {
+export function joinText(s: string, next: string): string {
   if (s === "") return next;
   if (/[A-Za-z]-$/.test(s) && /^[a-z]/.test(next)) return s.slice(0, -1) + next;
   if (CJK.test(s.slice(-1)) || CJK.test(next.charAt(0))) return s + next;
@@ -735,6 +735,8 @@ interface Candidate {
   seg: LayoutSegment;
   /** 在頁面上下緣。 */
   edge: boolean;
+  /** 離上下緣稍遠的一行短字（期刊的頁尾常在 7% 之外）：在多頁同一高度重複出現才當成頁首頁尾。 */
+  outer: string | null;
   col: Line["col"];
   /** 整段是一兩行和內文不同字型的短行（粗體或斜體的標題）。 */
   fontHead: boolean;
@@ -807,10 +809,12 @@ export function layoutDocument(pages: PageInput[]): DocumentLayout {
       ];
       const nearTop = y1 > vy1 - h * 0.07;
       const nearBottom = y0 < vy0 + h * 0.07;
+      const outerBand = y1 > vy1 - h * 0.12 || y0 < vy0 + h * 0.12;
       cands.push({
         page: pi,
         seg: { page: pi, bbox, kind: "body", size, source: text },
         edge: (nearTop || nearBottom) && text.length < 120,
+        outer: outerBand && ls.length === 1 && text.length <= 120 ? `${edgeKey(text)}@${Math.round((y0 - vy0) / 4)}` : null,
         col: para.col,
         fontHead: ls.length <= 2 && ls.every((l) => fontHeadingLine(l, bodyFont)),
         inColumn: gutter !== null && para.col !== "span" && ls.length >= 3,
@@ -870,7 +874,7 @@ export function layoutDocument(pages: PageInput[]): DocumentLayout {
     });
   };
 
-  // 頁首頁尾：上下緣的短文字，單純的頁碼，或在三頁以上重複出現的
+  // 頁首頁尾：上下緣的短文字，單純的頁碼，或在三頁以上重複出現的；離上下緣稍遠的一行短字在三頁以上同一高度重複出現的
   const edgeCount = new Map<string, Set<number>>();
   for (const c of cands) {
     if (!c.edge) continue;
@@ -880,6 +884,15 @@ export function layoutDocument(pages: PageInput[]): DocumentLayout {
     edgeCount.set(k, set);
   }
   const repeatMin = Math.min(3, Math.max(2, Math.ceil(pages.length * 0.3)));
+  // 稍遠的一行短字：同樣的字（數字不計）在同一高度出現的頁數
+  const outerCount = new Map<string, Set<number>>();
+  for (const c of cands) {
+    if (c.outer === null) continue;
+    const set = outerCount.get(c.outer) ?? new Set<number>();
+    set.add(c.page);
+    outerCount.set(c.outer, set);
+  }
+  const repeatedOuter = (c: Candidate) => c.outer !== null && (outerCount.get(c.outer)?.size ?? 0) >= repeatMin;
   const isPageNumber = (s: string) => /^\s*(page\s*)?(\d{1,4}|[ivxlc]{1,6})\s*(of\s*\d+)?\s*$/i.test(s);
 
   // 第 1 頁的篇名：第 1 頁字級最大的段落（要翻）；它之後、摘要或第一個章節標題之前的是作者與單位（不翻）
@@ -906,6 +919,7 @@ export function layoutDocument(pages: PageInput[]): DocumentLayout {
     const s = c.seg;
     const text = s.source;
     if (c.edge && (isPageNumber(text) || (edgeCount.get(edgeKey(text))?.size ?? 0) >= repeatMin)) continue;
+    if (repeatedOuter(c)) continue;
     if (isPageNumber(text)) continue;
 
     // 篇名排成兩三行、被切成幾段（置中的行寬不一、上一行很短）：緊接在篇名下面、同樣字級的段落併進篇名，一起翻

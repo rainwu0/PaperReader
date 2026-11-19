@@ -170,6 +170,8 @@ pub struct TranslateSettings {
     pub prompts: Vec<PromptPreset>,
     /// 第二輪潤飾。
     pub refine: bool,
+    /// 收尾重翻：整篇翻完後，把沒用到已定術語譯法的段落再翻一次（預設開著）。
+    pub final_pass: bool,
     /// 離線翻譯的語言模型只在不計流量的網路（Wi-Fi）下載。
     pub wifi_only: bool,
     /// 上次用來翻的服務（代號）：翻譯面板照它選好。不在服務清單裡的讀檔時丟掉。
@@ -201,6 +203,7 @@ struct RawSettings {
     digest_prompt: Option<String>,
     prompts: Vec<PromptPreset>,
     refine: bool,
+    final_pass: Option<bool>,
     wifi_only: Option<bool>,
     last_service: Option<String>,
     last_digest_service: Option<String>,
@@ -286,6 +289,7 @@ impl From<RawSettings> for TranslateSettings {
                 .unwrap_or_else(|| DEFAULT_DIGEST_PRESET.to_string()),
             prompts: r.prompts,
             refine: r.refine,
+            final_pass: r.final_pass.unwrap_or(true),
             wifi_only: r.wifi_only.unwrap_or(true),
             last_service,
             last_digest_service,
@@ -906,6 +910,7 @@ mod tests {
         assert!(s.service("bergamot").unwrap().enabled);
         assert!(!s.service("deepl").unwrap().enabled);
         assert!(s.wifi_only);
+        assert!(s.final_pass, "the final pass is on unless turned off");
         assert_eq!(s.prompt, "academic");
         assert!(s.validate().is_ok());
         assert_eq!(s.last_service, None);

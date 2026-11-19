@@ -648,6 +648,7 @@ fn digest_of(lib: &LocalLibrary, id: &str) -> PaperDigest {
 
 fn overlay_draft(mid: &str) -> OverlayDraft {
     OverlayDraft {
+        layout_model_pages: Vec::new(),
         source_material: mid.into(),
         provider: "anthropic".into(),
         model: "x".into(),

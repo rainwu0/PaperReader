@@ -141,6 +141,7 @@ pub fn run() {
             commands::translate::translate_quick,
             commands::translate::overlay_create,
             commands::translate::overlay_read,
+            commands::translate::overlay_continuations,
             commands::translate::translate_run,
             commands::translate::translate_status,
             commands::translate::translate_cancel,

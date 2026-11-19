@@ -110,6 +110,29 @@ test("頁首頁尾與頁碼不翻", () => {
   }
 });
 
+test("離上下緣稍遠、在多頁同一高度重複的一行短字也是頁首頁尾", () => {
+  // 頁尾的下緣在頁高 7% 之外（期刊的「Article number, page N」）
+  const pages = [];
+  for (let p = 1; p <= 4; p++) {
+    const items = [it(72, 64, `Example Journal 12, Article number, page ${p}`, 9)];
+    items.push(...para(72, 600, w("pw", 24), { perLine: 12 })[0]);
+    // 只在第 2 頁、同一個位置的一行字：不是頁尾，照翻
+    if (p === 2) items.push(it(72, 720, "Received in final form without further changes", 9));
+    pages.push({ view: VIEW, items });
+  }
+  const out = layoutPages(pages);
+  assert.ok(out.every((s) => !s.source.includes("Article number")), out.map((s) => s.source).join(" | "));
+  assert.equal(out.filter((s) => s.source.startsWith("pwaa")).length, 4);
+  assert.ok(out.some((s) => s.source.startsWith("Received in final form")));
+});
+
+test("每頁同一個位置的多行內文不當成頁首頁尾", () => {
+  const pages = [];
+  for (let p = 1; p <= 4; p++) pages.push({ view: VIEW, items: para(72, 70, w("same", 24), { perLine: 12 })[0] });
+  const out = layoutPages(pages);
+  assert.equal(out.length, 4, out.map((s) => s.source).join(" | "));
+});
+
 test("圖說要翻；座標軸標籤、純數字、公式不翻", () => {
   const [body, y] = para(72, 700, w("body", 24), { perLine: 12 });
   const figure = [

@@ -21,6 +21,7 @@
 //!   "target_lang": "zh-TW",
 //!   "created": "…", "created_by": "<裝置代號>",
 //!   "modified": "…", "modified_by": "<裝置代號>",
+//!   "layout_model_pages": [0, 1, 3],  // 用版面模型分段的頁；都沒有用時不寫出
 //!   "segments": [
 //!     { "id": "g0001", "page": 0, "bbox": [x0, y0, x1, y1], "kind": "body",
 //!       "size": 9.96, "source": "原文", "target": null, "status": "pending", "error": null }
@@ -36,6 +37,8 @@
 //! - 重新翻譯、接著翻：把 `pending` 與 `failed` 的段落再送翻，已 `done` 的不重翻。
 //! - 每一段的 `issues`（自動檢查的問題代號）、`modified`、`modified_by`、`service`（翻這一段的服務）
 //!   寫在譯文疊加檔裡。
+//! - `layout_model_pages`：建立時哪幾頁是依版面模型的區塊分段的（頁序，從 0 起算，由小到大、不重複）。
+//!   沒有這個欄位或是空的，就是全部照規則分段。翻譯只在這些頁上認跨欄、跨頁的接續。
 //!
 //! # 寫入的規則（與 `ink.json` 相同）
 //!
@@ -95,6 +98,14 @@ pub struct OverlayFile {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub terms: Vec<OverlayTerm>,
+    /// 建立時依版面模型的區塊分段的頁（頁序，由小到大、不重複）。沒有時不寫出；0.1.5 之前的檔沒有它，
+    /// 讀成空的（全部照規則分段）。
+    #[serde(
+        default,
+        deserialize_with = "null_as_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub layout_model_pages: Vec<u32>,
     #[serde(flatten)]
     pub extra: Map,
 }
@@ -261,6 +272,8 @@ pub struct OverlayDraft {
     pub source_lang: Option<String>,
     pub target_lang: String,
     pub segments: Vec<SegmentDraft>,
+    /// 依版面模型分段的頁（頁序）；建立時排好、去掉重複。
+    pub layout_model_pages: Vec<u32>,
 }
 
 /// 更新一段的結果。`status` 是 `done` 時 `target` 必須有字；`failed` 時 `error` 記原因的種類；
@@ -309,6 +322,13 @@ pub(crate) fn validate_draft(d: &OverlayDraft, pages: Option<u32>) -> Result<()>
         return Err(bad(
             "model and source language are limited to 200 characters",
         ));
+    }
+    for &p in &d.layout_model_pages {
+        if p >= MAX_PAGE_INDEX || pages.is_some_and(|n| p >= n) {
+            return Err(bad(format!(
+                "layout model page {p} is beyond the pages of the material"
+            )));
+        }
     }
     for (i, s) in d.segments.iter().enumerate() {
         if s.page >= MAX_PAGE_INDEX {

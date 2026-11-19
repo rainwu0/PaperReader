@@ -1010,6 +1010,8 @@ export interface TranslateSettingsView {
   /** 內建的在前（改過的是改過的內容），自訂的在後；兩種用途都在。 */
   prompts: PromptPresetView[];
   refine: boolean;
+  /** 收尾重翻：整篇翻完後，把沒用到已定術語譯法的段落再翻一次。 */
+  finalPass: boolean;
   /** 離線引擎的語言模型只在 Wi-Fi 下載（在 Firefox 翻譯那一筆的頁面裡設）。 */
   wifiOnly: boolean;
   secretsSupported: boolean;
@@ -1050,6 +1052,7 @@ export interface TranslateSettingsPatch {
   digestPrompt?: string;
   prompts?: PromptPreset[];
   refine?: boolean;
+  finalPass?: boolean;
   wifiOnly?: boolean;
   /** 這次用來翻的服務（翻譯面板開始時記下）。 */
   lastService?: string;

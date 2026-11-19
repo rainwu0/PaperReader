@@ -49,6 +49,12 @@ impl LocalLibrary {
             created_by: Some(self.device_id.clone()),
             modified: Some(now.clone()),
             modified_by: Some(self.device_id.clone()),
+            layout_model_pages: {
+                let mut p = draft.layout_model_pages.clone();
+                p.sort_unstable();
+                p.dedup();
+                p
+            },
             segments: draft
                 .segments
                 .iter()

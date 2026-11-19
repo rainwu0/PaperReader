@@ -19,6 +19,7 @@ fn seg(id: &str, text: &str) -> Segment {
         id: id.into(),
         text: text.into(),
         before: None,
+        ..Default::default()
     }
 }
 
@@ -582,6 +583,7 @@ async fn context_before_is_sent_but_marked_as_context() {
         id: "1".into(),
         text: "Second".into(),
         before: Some("First paragraph.".into()),
+        ..Default::default()
     };
     e.translate_batch(&params(), &[s], &Cancel::new())
         .await
@@ -927,6 +929,7 @@ async fn the_preview_is_exactly_what_is_sent_for_translate_and_refine() {
             id: "a".into(),
             text: "LoRA uses a token.".into(),
             before: Some("Before.".into()),
+            ..Default::default()
         },
         seg("b", "World"),
     ];
@@ -1115,4 +1118,180 @@ async fn quick_translation_gives_up_on_a_silent_service_after_its_short_timeout(
 fn quick_timeouts_are_short() {
     assert_eq!(QUICK_CONNECT_TIMEOUT, Duration::from_secs(5));
     assert!(QUICK_TOTAL_TIMEOUT < Duration::from_secs(60));
+}
+
+#[tokio::test]
+async fn a_continuation_goes_out_with_its_first_half_and_a_note() {
+    let srv = serve(|req, _| openai_reply(&fake_translate(&user_text(&req.body)))).await;
+    let e = Engine::new(&cfg(
+        Provider::OpenaiCompatible,
+        &format!("{}/v1", srv.base),
+        "m",
+        "",
+    ))
+    .unwrap();
+    let mut p = params();
+    p.target_lang = "de".into();
+    let segs = vec![
+        seg("a", "Our intuition is that, at least locally, the robot"),
+        seg("cap", "Fig. 1. Overview."),
+        Segment {
+            continues: Some("a".into()),
+            ..seg("b", "should act in a consistent way.")
+        },
+    ];
+    let mut order: Vec<String> = Vec::new();
+    let sum = run_job(&e, &p, segs, &Cancel::new(), |ev| {
+        order.extend(ev.items.into_iter().map(|i| i.id));
+        true
+    })
+    .await;
+    assert_eq!(sum.done, 3);
+    assert_eq!(order, vec!["a", "b", "cap"]);
+    let sent = user_text(&srv.last().body);
+    assert!(sent.find("<seg id=\"b\">").unwrap() < sent.find("<seg id=\"cap\">").unwrap());
+    assert!(
+        sent.contains("Note: passage b continues passage a"),
+        "{sent}"
+    );
+}
+
+#[tokio::test]
+async fn the_final_pass_adopts_a_retranslation_that_uses_the_settled_term() {
+    // 送出的術語裡有 token => 詞元 時，假服務照用；否則譯成「權杖」
+    let srv = serve(|req, _| {
+        let text = user_text(&req.body);
+        let reply = fake_translate(&text);
+        if req.body.contains("token => 詞元") {
+            openai_reply(&reply.replace("token", "詞元"))
+        } else {
+            openai_reply(&reply.replace("token", "權杖"))
+        }
+    })
+    .await;
+    let e = Engine::new(&cfg(
+        Provider::OpenaiCompatible,
+        &format!("{}/v1", srv.base),
+        "m",
+        "",
+    ))
+    .unwrap()
+    .with_paper_terms(vec![PaperTerm {
+        source: "token".into(),
+        target: "詞元".into(),
+        state: TermState::Learned,
+        batches: 2,
+    }]);
+    let mut p = params();
+    p.target_lang = "de".into();
+    let items = vec![
+        FinalPassItem {
+            segment: seg("a", "Each token is kept [7]."),
+            current: "譯：Each 權杖 is kept [7].".into(),
+        },
+        FinalPassItem {
+            segment: seg("b", "A token appears."),
+            current: "譯：A 權杖 appears.".into(),
+        },
+    ];
+    let mut got: Vec<(String, String)> = Vec::new();
+    let n = run_final_pass(&e, &p, items, &Cancel::new(), |ev| {
+        got.extend(ev.items.into_iter().map(|i| (i.id, i.result.unwrap())));
+        true
+    })
+    .await;
+    assert_eq!(n.adopted, 2);
+    assert_eq!(
+        got,
+        vec![
+            ("a".to_string(), "譯：Each 詞元 is kept [7].".to_string()),
+            ("b".to_string(), "譯：A 詞元 appears.".to_string())
+        ]
+    );
+    assert_eq!(srv.count(), 1, "one batch");
+    // 沒用到術語、或引用不見了：不採用
+    let srv2 =
+        serve(|req, _| openai_reply(&fake_translate(&user_text(&req.body)).replace(" [7]", "")))
+            .await;
+    let e2 = Engine::new(&cfg(
+        Provider::OpenaiCompatible,
+        &format!("{}/v1", srv2.base),
+        "m",
+        "",
+    ))
+    .unwrap()
+    .with_paper_terms(e.paper_terms());
+    let items = vec![FinalPassItem {
+        segment: seg("a", "Each token is kept [7]."),
+        current: "譯：Each 權杖 is kept [7].".into(),
+    }];
+    let n = run_final_pass(&e2, &p, items, &Cancel::new(), |_| true).await;
+    assert_eq!(n.adopted, 0);
+}
+
+#[tokio::test]
+async fn the_final_pass_adopts_both_halves_of_a_continuation_or_neither() {
+    // 前一段用到術語了，後一段卻丟了引用：整對不採用（新的前一段不會接上舊的後一段）
+    let srv = serve(|req, _| {
+        let text = user_text(&req.body);
+        openai_reply(
+            &fake_translate(&text)
+                .replace("token", "詞元")
+                .replace(" [7]", ""),
+        )
+    })
+    .await;
+    let e = Engine::new(&cfg(
+        Provider::OpenaiCompatible,
+        &format!("{}/v1", srv.base),
+        "m",
+        "",
+    ))
+    .unwrap()
+    .with_paper_terms(vec![PaperTerm {
+        source: "token".into(),
+        target: "詞元".into(),
+        state: TermState::Learned,
+        batches: 2,
+    }]);
+    let mut p = params();
+    p.target_lang = "de".into();
+    let pair = || {
+        vec![
+            FinalPassItem {
+                segment: seg("a", "Each token of the"),
+                current: "譯：Each 權杖 of the".into(),
+            },
+            FinalPassItem {
+                segment: Segment {
+                    continues: Some("a".into()),
+                    ..seg("b", "sentence is kept [7].")
+                },
+                current: "譯：sentence is kept [7].".into(),
+            },
+        ]
+    };
+    let sum = run_final_pass(&e, &p, pair(), &Cancel::new(), |_| true).await;
+    assert_eq!(sum.adopted, 0);
+    assert_eq!(srv.count(), 1, "the pair goes out in one batch");
+
+    // 寫入失敗與取消照實交回
+    let srv2 = serve(|req, _| {
+        openai_reply(&fake_translate(&user_text(&req.body)).replace("token", "詞元"))
+    })
+    .await;
+    let e2 = Engine::new(&cfg(
+        Provider::OpenaiCompatible,
+        &format!("{}/v1", srv2.base),
+        "m",
+        "",
+    ))
+    .unwrap()
+    .with_paper_terms(e.paper_terms());
+    let sum = run_final_pass(&e2, &p, pair(), &Cancel::new(), |_| false).await;
+    assert!(sum.sink_failed && sum.adopted == 2, "{sum:?}");
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let sum = run_final_pass(&e2, &p, pair(), &cancel, |_| true).await;
+    assert!(sum.cancelled, "{sum:?}");
 }

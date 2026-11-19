@@ -21,6 +21,73 @@ export function shownText(s: Seg): { text: string; untranslated: boolean } {
   return done ? { text: s.target ?? "", untranslated: false } : { text: s.source, untranslated: true };
 }
 
+const CJK_EDGE = /[⺀-鿿豈-﫿＀-￯]/;
+
+/**
+ * 譯文（閱讀模式）的一段一段：一般一段一個；一個句子跨欄或跨頁被切成前後兩段（接續，`pairs` 是外殼認出的
+ * （前一段, 後一段）代號）時接成一個，夾在中間的圖說排到它後面。三段接續也接成一個。
+ */
+export function readingUnits<T extends Seg>(segs: readonly T[], pairs: ReadonlyArray<readonly [string, string]>): T[][] {
+  const at = new Map(segs.map((s, i) => [s.id, i]));
+  const next = new Map<string, T>();
+  for (const [a, b] of pairs) {
+    const i = at.get(a);
+    const j = at.get(b);
+    const sb = j === undefined ? undefined : segs[j];
+    if (i !== undefined && j !== undefined && j > i && sb) next.set(a, sb);
+  }
+  const used = new Set<string>();
+  const out: T[][] = [];
+  for (const s of segs) {
+    if (used.has(s.id)) continue;
+    const unit = [s];
+    for (let n = next.get(s.id); n && !used.has(n.id); n = next.get(n.id)) {
+      unit.push(n);
+      used.add(n.id);
+    }
+    out.push(unit);
+  }
+  return out;
+}
+
+/** 一份譯本的接續（（前一段, 後一段）代號）：屬於哪一份、內容。 */
+export interface ContinuationState {
+  overlayId: string | null;
+  pairs: Array<[string, string]>;
+}
+
+export type ContinuationEvent =
+  | { type: "open"; overlayId: string }
+  | { type: "loaded"; overlayId: string; pairs: Array<[string, string]> }
+  | { type: "failed"; overlayId: string };
+
+/** 接續清單的狀態：換了譯本先清空；讀回來的不是現在這一份就不用；讀不到就是空的（不接段）。 */
+export function continuationsFor(state: ContinuationState | null, ev: ContinuationEvent): ContinuationState {
+  const cur = state ?? { overlayId: null, pairs: [] };
+  switch (ev.type) {
+    case "open":
+      return { overlayId: ev.overlayId, pairs: [] };
+    case "loaded":
+      return ev.overlayId === cur.overlayId ? { overlayId: cur.overlayId, pairs: ev.pairs } : cur;
+    case "failed":
+      return ev.overlayId === cur.overlayId ? { overlayId: cur.overlayId, pairs: [] } : cur;
+  }
+}
+
+/** 接成一段的顯示文字：中文直接接上，英文之間空一格；有一段沒翻就標沒翻。 */
+export function joinedText(parts: readonly Seg[]): { text: string; untranslated: boolean } {
+  let text = "";
+  let untranslated = false;
+  for (const p of parts) {
+    const shown = shownText(p);
+    untranslated ||= shown.untranslated;
+    const t = shown.text.trim();
+    if (text === "" || CJK_EDGE.test(text.slice(-1)) || CJK_EDGE.test(t.charAt(0))) text += t;
+    else text += ` ${t}`;
+  }
+  return { text, untranslated };
+}
+
 /** 使用者改過的（就地修改；`by_user` 而且沒有記服務）與在並排比較挑的（`by_user` 加上服務）。 */
 export function editMark(s: Seg): "edited" | "picked" | null {
   if (!s.by_user) return null;

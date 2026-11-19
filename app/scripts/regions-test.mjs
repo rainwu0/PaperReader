@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { layoutPages, segmentOf } from "../src/translate/layout.ts";
-import { layoutWithRegions } from "../src/translate/regions.ts";
+import { layoutWithRegions, modelPages } from "../src/translate/regions.ts";
 
 const VIEW = [0, 0, 612, 792];
 
@@ -156,4 +156,53 @@ test("上標、下標貼回主行：行尾的連字號照樣接回（公開組 a
   assert.ok(!/pros|s vides/.test(s.source), s.source);
   // 方框照樣包住上標與下標的中心（量測與閱讀畫面都依中心點歸段）
   assert.ok(s.bbox[3] >= 703.6 + 0.3 * 7 && s.bbox[1] <= 698.5 + 0.3 * 7, String(s.bbox));
+});
+
+test("模型把規則的同一段標題切成兩個框：併回一段標題；兩段本文不併", () => {
+  // 篇名排成兩行，規則併成一段標題；模型給篇名框蓋住第一行、另一個本文框蓋住第二行
+  const l1 = it(140, 720, "Measuring the decline rates of faint transients in dense galaxy", 17);
+  const l2 = it(250, 690, "cluster cores", 17);
+  const authors = it(200, 650, "A. Writer, B. Reader, and C. Editor", 10);
+  const [abs] = para(72, 600, ["Abstract.", ...w("abs", 40)], { perLine: 12 });
+  const pages = [{ view: VIEW, items: [l1, l2, authors, ...abs] }];
+  const title = "Measuring the decline rates of faint transients in dense galaxy cluster cores";
+  assert.ok(layoutPages(pages).some((s) => s.source === title && s.kind === "heading"));
+  const out = layoutWithRegions(pages, [
+    [
+      { label: "doc_title", score: 0.9, bbox: boxOf([l1]) },
+      { label: "text", score: 0.6, bbox: boxOf([l2]) },
+      { label: "text", score: 0.9, bbox: boxOf(abs) },
+    ],
+  ]);
+  assert.deepEqual(
+    out.map((s) => [s.kind, s.source.slice(0, 20)]),
+    [
+      ["heading", title.slice(0, 20)],
+      ["body", "Abstract. absaa absa"],
+    ],
+  );
+  assert.equal(out[0].source, title);
+  const [x0, y0, x1, y1] = out[0].bbox;
+  assert.ok(x0 <= 140 && x1 >= 250 + 13 * 8.5 && y0 <= 690 && y1 >= 720 + 10, out[0].bbox.join(","));
+
+  // 規則的同一段本文被模型切成兩個框：照模型分兩段（跨欄跨頁的句子另外處理）
+  const [a, ya] = para(72, 700, w("alpha", 24), { perLine: 12 });
+  const [b] = para(72, ya, w("theta", 24), { perLine: 12 });
+  const page2 = [{ view: VIEW, items: para(72, 700, w("first", 24), { perLine: 12 })[0] }, { view: VIEW, items: [...a, ...b] }];
+  assert.equal(layoutPages(page2).filter((s) => s.page === 1).length, 1);
+  const out2 = layoutWithRegions(page2, [
+    null,
+    [
+      { label: "text", score: 0.9, bbox: boxOf(a, 0.5) },
+      { label: "text", score: 0.9, bbox: boxOf(b, 0.5) },
+    ],
+  ]).filter((s) => s.page === 1);
+  assert.equal(out2.length, 2);
+});
+
+test("依模型分段的頁：認出區塊的頁才算；模型沒跑（失敗、頁面旋轉）或一個區塊都沒認出的頁不算", () => {
+  const box = [{ label: "text", score: 0.9, bbox: [0, 0, 10, 10] }];
+  assert.deepEqual(modelPages(4, [box, null, [], undefined]), [0]);
+  assert.deepEqual(modelPages(2, []), []);
+  assert.deepEqual(modelPages(1, [box, box]), [0]);
 });

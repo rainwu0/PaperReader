@@ -50,6 +50,7 @@ struct Own {
 
 fn overlay_draft(source: &str) -> OverlayDraft {
     OverlayDraft {
+        layout_model_pages: Vec::new(),
         source_material: source.into(),
         provider: "deepl".into(),
         model: String::new(),

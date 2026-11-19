@@ -16,7 +16,7 @@ use crate::glossary::relevant;
 use crate::text::is_chinese;
 use crate::{Params, Segment};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// 預設組的用途。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -69,8 +69,13 @@ Do not summarize, explain, add or omit anything.",
         text: "You are a professional translator of academic papers, fluent in the terminology of the paper's field. \
 The paper is titled \"{{title}}\". Translate each passage from {{from}} into {{to}}.\n\
 - Use the established technical terms of the field and keep each term consistent throughout the paper.\n\
-- Keep proper nouns, model and method names, dataset names and acronyms in their original form; \
-when a standard translation exists, put it in parentheses after the first occurrence only.\n\
+- Parenthesized English: keep proper nouns, model and method names, dataset names and acronyms in their original form \
+without parentheses; write a technical term that has an established translation only in the target language, \
+without the English; add the English in parentheses after the translation only at the first occurrence in the paper \
+of the full form of an acronym or of a technical term without an established translation.\n\
+- When translating into Traditional Chinese for Taiwan, use the wording common in Taiwan, for example \
+呼叫 (not 調用), 預設 (not 默認), 設定 (not 設置), 資訊 (not 信息), 網路 (not 網絡), 最佳化 (not 優化), \
+分布 (not 分佈) and 笛卡兒 (not 笛卡爾).\n\
 - Keep the formal, precise register of academic writing.\n\
 - Translate faithfully and completely. Do not summarize, explain, add or omit anything.",
         sections: &[],
@@ -254,9 +259,19 @@ pub(crate) fn language_rules(target_lang: &str) -> String {
              not Mainland Chinese terms, and use 「」 for quotation marks (『』 inside 「」).\n",
         );
     }
+    if is_taiwan(target_lang) {
+        s.push_str(
+            "- Cross-references: (Section 4.2) → (第 4.2 節), Fig. 3 → 圖 3, Table 2 → 表 2, Eq. (5) → 式 (5).\n",
+        );
+    } else if is_chinese(target_lang) {
+        s.push_str(
+            "- Cross-references: (Section 4.2) → (第 4.2 节), Fig. 3 → 图 3, Table 2 → 表 2, Eq. (5) → 式 (5).\n",
+        );
+    }
     if is_chinese(target_lang) {
         s.push_str(
-            "- In Chinese text use full-width punctuation (，。：；？！（）), not half-width; keep numbers, formulas, code and English words as they are.\n",
+            "- In Chinese text use full-width punctuation (，。：；？！（）), not half-width; keep numbers, formulas, code and English words as they are. \
+             Citation markers keep their original half-width brackets and spacing, for example (Smith et al., 2020), Smith et al. (2020) and [12].\n",
         );
     }
     s
@@ -267,7 +282,9 @@ pub(crate) fn fixed_rules(p: &Params) -> String {
     let mut s = String::from(
         "\n\nRules that always apply:\n\
          - Keep mathematical formulas, symbols, LaTeX, equation numbers, variable names, code, URLs and DOIs exactly as written.\n\
-         - Keep citation markers unchanged, for example [12], [3, 5] and (Smith et al., 2020).\n",
+         - Keep citation markers unchanged, for example [12], [3, 5] and (Smith et al., 2020).\n\
+         - In cross-references to sections, figures, tables and equations, translate the word into the target language and keep the number exactly as in the original.\n\
+         - Do not append the whole original passage to its translation.\n",
     );
     s.push_str(&language_rules(&p.target_lang));
     s
@@ -314,7 +331,7 @@ pub fn terms_in_use(terms: &[PaperTerm]) -> Vec<(String, String)> {
 }
 
 /// `hay` 裡有沒有整個詞 `word`（都已轉小寫）：詞的兩端若是英數字，前後就不能接著英數字。
-fn has_word(hay: &str, word: &str) -> bool {
+pub(crate) fn has_word(hay: &str, word: &str) -> bool {
     if word.is_empty() {
         return false;
     }
@@ -391,6 +408,8 @@ pub fn translate_parts(
             true,
             "- The input is a list of passages, each wrapped as <seg id=\"N\">…</seg>. Reply with exactly the same wrappers, one per passage, in the same order, with the same ids, then the <terms> block, and nothing else.\n\
              - Passages marked as context are only for understanding the text; never translate or output them.\n\
+             - A note after the passages may say that a passage continues another passage or the context: one sentence was split across columns or pages. \
+             Read the parts together as one sentence and translate each passage as its own part of that sentence, so that the translations read on as one sentence without repeating anything.\n\
              - After the last passage, add one <terms>…</terms> block listing the technical terms of the field that you translated in these passages, one per line as `original => translation` (at most 12 lines; write the original again when you kept a term untranslated). Write <terms></terms> when there are none.\n"
                 .to_string(),
         ),
@@ -403,7 +422,8 @@ pub fn system_prompt(p: &Params, batch: &[Segment], terms: &[(String, String)]) 
     join(&translate_parts(p, batch, terms))
 }
 
-/// 送出的內容：前文（只供理解）加上一批段落。
+/// 送出的內容：前文（只供理解）加上一批段落。有接續時，段落之後另附後文與註明
+/// （不放進 `<seg>` 標籤裡：模型照抄進回覆就讀不懂了）。
 pub fn user_message(batch: &[Segment], before: Option<&str>) -> String {
     let mut s = String::new();
     if let Some(b) = before.filter(|b| !b.trim().is_empty()) {
@@ -413,6 +433,46 @@ pub fn user_message(batch: &[Segment], before: Option<&str>) -> String {
     }
     for seg in batch {
         s.push_str(&format!("<seg id=\"{}\">{}</seg>\n", seg.id, seg.text));
+    }
+    let after = batch.iter().find_map(|g| {
+        g.after
+            .as_deref()
+            .filter(|a| !a.trim().is_empty())
+            .map(|a| (g, a))
+    });
+    if let Some((_, a)) = after {
+        s.push_str("\n<context>\n");
+        s.push_str(a.trim());
+        s.push_str("\n</context>\n");
+    }
+    let mut notes = Vec::new();
+    for (i, seg) in batch.iter().enumerate() {
+        match seg.continues.as_deref() {
+            Some(m) if batch.iter().any(|g| g.id == m) => notes.push(format!(
+                "Note: passage {} continues passage {m} (one sentence split across columns or pages).",
+                seg.id
+            )),
+            // 前文只有一批的第一段的；不是第一段時，送出的前文不是它的前一段
+            Some(_) if i == 0 && before.is_some_and(|b| !b.trim().is_empty()) => notes.push(format!(
+                "Note: passage {} continues the sentence in the context before it.",
+                seg.id
+            )),
+            Some(_) => {}
+            None => {}
+        }
+    }
+    if let Some((g, _)) = after {
+        notes.push(format!(
+            "Note: passage {} is continued by the sentence in the context after it.",
+            g.id
+        ));
+    }
+    if !notes.is_empty() {
+        s.push('\n');
+        for n in notes {
+            s.push_str(&n);
+            s.push('\n');
+        }
     }
     s
 }
@@ -592,14 +652,16 @@ fn strip_tags(s: &str) -> String {
 
 /// 一批翻完、譯文定下之後（潤飾、單段重翻之後），把這一批回覆附的術語記進這篇的術語：
 /// - 原文詞至少 3 個字、整個詞出現在這一批的原文裡，譯法出現在這一批**留下的**譯文裡，才算這一批用了這個譯法；
-/// - 第一次是候選（不用），下一批又是同一個譯法才定下（照用）；換了譯法就換掉候選、重新數（一個詞只有一條，
-///   譯文疊加檔裡原文詞不重複）；
+/// - 第一次是候選（不用），同一個譯法用滿兩批才定下（照用），兩批不必相連：每個譯法用過幾批記在 `tally`
+///   （這次工作的記憶體裡），在幾種譯法之間來回換的詞也定得下來；候選只留最近的那個譯法（一個詞只有一條，
+///   譯文疊加檔裡原文詞不重複），批數是那個譯法用過的批數；
 /// - 術語庫已有的原文詞、已經定下的、使用者定的或刪掉的，都不動；
 /// - 照用的最多 [`MAX_PAPER_TERMS`] 條，連同候選最多 [`MAX_KNOWN_TERMS`] 條。
 ///
 /// 交回這一批新定下的條數。
 pub fn learn_terms(
     known: &mut Vec<PaperTerm>,
+    tally: &mut HashMap<(String, String), u32>,
     found: Vec<(String, String)>,
     sources: &[&str],
     outputs: &[&str],
@@ -627,21 +689,19 @@ pub fn learn_terms(
         {
             continue;
         }
-        // 一個詞只留一個候選（譯文疊加檔裡原文詞不重複）：換了譯法就換掉候選、重新數
-        if let Some(k) = known
-            .iter_mut()
-            .find(|k| same_word(k) && k.target.trim() != t)
-        {
-            k.target = t.clone();
-            k.batches = 1;
-            continue;
-        }
-        match known
+        // 這個譯法用過幾批：記憶體裡沒有時（接著翻）從候選記的批數算起
+        let carried = known
             .iter()
-            .position(|k| same_word(k) && k.target.trim() == t)
-        {
+            .find(|k| same_word(k) && k.target.trim() == t)
+            .map_or(0, |k| k.batches);
+        let count = tally.entry((f.clone(), t.clone())).or_insert(carried);
+        *count += 1;
+        let count = *count;
+        // 一個詞只留一個候選（譯文疊加檔裡原文詞不重複）：換成這個譯法與它用過的批數
+        match known.iter().position(&same_word) {
             Some(i) => {
-                known[i].batches += 1;
+                known[i].target = t.clone();
+                known[i].batches = count;
                 let in_use = known
                     .iter()
                     .filter(|k| matches!(k.state, TermState::Learned | TermState::User))
@@ -662,7 +722,7 @@ pub fn learn_terms(
                 source: from.trim().to_string(),
                 target: t,
                 state: TermState::Candidate,
-                batches: 1,
+                batches: count,
             }),
             None => {}
         }
@@ -679,6 +739,7 @@ mod tests {
             id: id.into(),
             text: text.into(),
             before: None,
+            ..Default::default()
         }
     }
 
@@ -755,9 +816,11 @@ mod tests {
     fn a_term_is_used_only_after_two_batches_agree() {
         // 第一批的譯法只是候選，第二批又是同一個譯法才定下（避免第一批的錯直接定案）
         let mut known: Vec<PaperTerm> = Vec::new();
+        let mut tally = std::collections::HashMap::new();
         let src = ["The token goes in."];
         let n = learn_terms(
             &mut known,
+            &mut tally,
             vec![pair("token", "權杖")],
             &src,
             &["權杖進去。"],
@@ -769,6 +832,7 @@ mod tests {
         // 第二批換了譯法：候選換成新的（一個詞只留一個候選：譯文疊加檔裡原文詞不重複）
         learn_terms(
             &mut known,
+            &mut tally,
             vec![pair("token", "詞元")],
             &src,
             &["詞元進去。"],
@@ -779,6 +843,7 @@ mod tests {
         // 第三批又是「詞元」：定下
         let n = learn_terms(
             &mut known,
+            &mut tally,
             vec![pair("Token", "詞元")],
             &src,
             &["詞元進去。"],
@@ -790,6 +855,7 @@ mod tests {
         // 定下的不再被換掉
         learn_terms(
             &mut known,
+            &mut tally,
             vec![pair("token", "符記")],
             &src,
             &["符記"],
@@ -797,6 +863,7 @@ mod tests {
         );
         learn_terms(
             &mut known,
+            &mut tally,
             vec![pair("token", "符記")],
             &src,
             &["符記"],
@@ -806,10 +873,54 @@ mod tests {
     }
 
     #[test]
+    fn two_batches_with_the_same_translation_count_even_when_not_in_a_row() {
+        // fallback 在「後備」「回退」之間來回換：任一個譯法用滿兩批就定下
+        let mut known: Vec<PaperTerm> = Vec::new();
+        let mut tally = std::collections::HashMap::new();
+        let src = ["The fallback is used."];
+        let out = ["後備、回退"];
+        for t in ["後備", "回退"] {
+            learn_terms(
+                &mut known,
+                &mut tally,
+                vec![pair("fallback", t)],
+                &src,
+                &out,
+                &[],
+            );
+            assert!(terms_in_use(&known).is_empty());
+        }
+        assert_eq!(known, vec![pt("fallback", "回退", TermState::Candidate, 1)]);
+        let n = learn_terms(
+            &mut known,
+            &mut tally,
+            vec![pair("fallback", "後備")],
+            &src,
+            &out,
+            &[],
+        );
+        assert_eq!(n, 1);
+        assert_eq!(known, vec![pt("fallback", "後備", TermState::Learned, 2)]);
+        // 接著翻（記憶體裡的次數沒了）：候選記的批數照算
+        let mut known = vec![pt("token", "詞元", TermState::Candidate, 1)];
+        let mut tally = std::collections::HashMap::new();
+        let n = learn_terms(
+            &mut known,
+            &mut tally,
+            vec![pair("token", "詞元")],
+            &["A token."],
+            &["詞元"],
+            &[],
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
     fn each_word_is_listed_once_whatever_the_model_proposes() {
         // stretch 有六種譯法、token 三種。一批裡同一個詞兩種譯法、大小寫不同、批次之間來回換：
         // 一個詞永遠只有一條（譯文疊加檔的規則）
         let mut known: Vec<PaperTerm> = Vec::new();
+        let mut tally = std::collections::HashMap::new();
         let src = ["The stretch and the Stretch factor."];
         let out = ["伸展、伸縮、拉伸、伸展參數"];
         for found in [
@@ -818,7 +929,7 @@ mod tests {
             vec![pair("STRETCH", "伸展參數"), pair("stretch", "伸展")],
             vec![pair("stretch", "伸展")],
         ] {
-            learn_terms(&mut known, found, &src, &out, &[]);
+            learn_terms(&mut known, &mut tally, found, &src, &out, &[]);
             let mut words: Vec<String> = known.iter().map(|k| k.source.to_lowercase()).collect();
             words.dedup();
             assert_eq!(words.len(), known.len(), "{known:?}");
@@ -831,12 +942,14 @@ mod tests {
             pt("policy", "策略", TermState::User, 0),
             pt("state", "", TermState::Removed, 0),
         ];
+        let mut tally = std::collections::HashMap::new();
         let glossary = vec![pair("reward", "獎勵")];
         let src = ["The policy, state and reward."];
         let out = ["政策、州與回報。"];
         for _ in 0..3 {
             learn_terms(
                 &mut known,
+                &mut tally,
                 vec![
                     pair("policy", "政策"),
                     pair("state", "州"),
@@ -861,9 +974,11 @@ mod tests {
     fn learned_terms_are_whole_words_of_three_or_more_characters() {
         // `state` 不能套到 statement、`RL` 不能套到 URL
         let mut known: Vec<PaperTerm> = Vec::new();
+        let mut tally = std::collections::HashMap::new();
         for _ in 0..2 {
             learn_terms(
                 &mut known,
+                &mut tally,
                 vec![
                     pair("state", "狀態"),
                     pair("RL", "強化學習"),
@@ -1036,6 +1151,104 @@ mod tests {
         assert!(s.contains("revising draft translations"));
         assert!(s.contains("<src id=\"N\">"));
         assert!(!s.contains("<terms>"), "refining does not ask for terms");
+    }
+
+    #[test]
+    fn continuations_are_noted_outside_the_passage_tags() {
+        let a = seg("g0108", "Our intuition is that the robot");
+        let b = Segment {
+            continues: Some("g0108".into()),
+            ..seg("g0109", "should act consistently.")
+        };
+        let m = user_message(&[a.clone(), b.clone()], None);
+        assert!(
+            m.contains("<seg id=\"g0109\">should act consistently.</seg>\n"),
+            "{m}"
+        );
+        assert!(m.ends_with("\nNote: passage g0109 continues passage g0108 (one sentence split across columns or pages).\n"), "{m}");
+        // 不是一批的第一段：送出的前文不是它的前一段，不註明
+        let m = user_message(&[seg("x", "Other."), b.clone()], Some("Something else"));
+        assert!(!m.contains("Note:"), "{m}");
+        // 前一段已翻好、不在這一批：前文就是它，註明接著前文
+        let m = user_message(
+            std::slice::from_ref(&b),
+            Some("Our intuition is that the robot"),
+        );
+        assert!(
+            m.contains("Note: passage g0109 continues the sentence in the context before it"),
+            "{m}"
+        );
+        // 前一段單獨重翻：後一段當後文
+        let one = Segment {
+            after: Some("should act consistently.".into()),
+            ..a
+        };
+        let m = user_message(&[one], None);
+        assert!(
+            m.contains("</seg>\n\n<context>\nshould act consistently.\n</context>\n"),
+            "{m}"
+        );
+        assert!(
+            m.contains("Note: passage g0108 is continued by the sentence in the context after it"),
+            "{m}"
+        );
+        // 註明不放進標籤裡：解析照舊
+        let s = system_prompt(&params(), &[seg("1", "x")], &[]);
+        assert!(s.contains("A note after the passages may say"));
+        assert!(!user_message(&[seg("1", "x")], None).contains("Note:"));
+    }
+
+    #[test]
+    fn the_fixed_rules_cover_citations_cross_references_and_echoes() {
+        let s = system_prompt(&params(), &[seg("1", "x")], &[]);
+        assert!(s.contains("Citation markers keep their original half-width brackets"));
+        assert!(s.contains("Do not append the whole original passage"));
+        // 章節、圖、表、式的指引：字照目標語言翻，編號照原文；中文的例子只在譯成中文時給
+        assert!(
+            s.contains("translate the word") && s.contains("keep the number"),
+            "{s}"
+        );
+        assert!(
+            s.contains("(Section 4.2) → (第 4.2 節)") && s.contains("Fig. 3 → 圖 3"),
+            "{s}"
+        );
+        let cn = system_prompt(
+            &Params {
+                target_lang: "zh-CN".into(),
+                ..params()
+            },
+            &[seg("1", "x")],
+            &[],
+        );
+        assert!(
+            cn.contains("(Section 4.2) → (第 4.2 节)") && cn.contains("Fig. 3 → 图 3"),
+            "{cn}"
+        );
+        let ja = system_prompt(
+            &Params {
+                target_lang: "ja".into(),
+                ..params()
+            },
+            &[seg("1", "x")],
+            &[],
+        );
+        assert!(
+            ja.contains("translate the word") && !ja.contains("4.2 節") && !ja.contains("4.2 节"),
+            "{ja}"
+        );
+        // 指引只說明要翻，不附英文的例句
+        assert!(!s.contains("for example (Section 4.2), Fig. 3"), "{s}");
+    }
+
+    #[test]
+    fn the_academic_preset_has_one_rule_for_parenthesized_english() {
+        let a = builtin_preset("academic").unwrap().text;
+        assert!(!a.contains("when a standard translation exists"), "{a}");
+        assert!(a.contains("without parentheses"), "{a}");
+        assert!(a.contains("only in the target language"), "{a}");
+        assert!(a.contains("full form of an acronym"), "{a}");
+        assert!(a.contains("分布 (not 分佈)") && a.contains("笛卡兒 (not 笛卡爾)"));
+        assert!(check_template(a).is_ok());
     }
 
     #[test]

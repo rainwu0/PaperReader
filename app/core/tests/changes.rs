@@ -354,6 +354,7 @@ fn overlay_update_stamps_segments() {
     let (p, m) = add_paper(&mut lib, 1, "Zhao Paper", Some(10));
     let tok = lib.get_paper(&p).unwrap().1;
     let draft = OverlayDraft {
+        layout_model_pages: Vec::new(),
         source_material: m,
         provider: "anthropic".into(),
         model: "x".into(),

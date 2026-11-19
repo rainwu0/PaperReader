@@ -16,7 +16,7 @@ import { errorMessage, t } from "../../strings";
 import { getBuild, startBuild, subscribeBuild, type BuildState } from "../../translate/autoBuild";
 import { Button, Spinner } from "../../ui/components";
 import { m as Motion, useMotion } from "../../ui/motion";
-import { editMark, pdfBehind, shownText } from "./segments";
+import { editMark, joinedText, pdfBehind, shownText } from "./segments";
 
 export interface OverlayDoc {
   doc: OverlayFile | null;
@@ -264,9 +264,13 @@ export function SegmentPop(props: {
 
 const LONG_PRESS_MS = 550; // 按住這麼久算長按（就地改）
 
-/** 閱讀模式的一段：點一下在下面展開原文（再點收起）；長按或展開後按「改」就地改。 */
+/**
+ * 閱讀模式的一段：點一下在下面展開原文（再點收起）；長按或展開後按「改」就地改。
+ * 跨欄、跨頁被切開的同一句（接續）接成一段顯示：`rest` 是接在後面的段落，原文也接著列；改的時候分開顯示（由譯文檢視處理）。
+ */
 export function Paragraph(props: {
   seg: OverlaySegment;
+  rest?: readonly OverlaySegment[];
   open: boolean;
   editing: boolean;
   onToggle: () => void;
@@ -276,7 +280,8 @@ export function Paragraph(props: {
   onCancel: () => void;
 }) {
   const { seg } = props;
-  const shown = shownText(seg);
+  const parts = [seg, ...(props.rest ?? [])];
+  const shown = parts.length > 1 ? joinedText(parts) : shownText(seg);
   const role = seg.kind === "heading" ? "heading" : seg.kind === "caption" ? "caption" : "body";
   const press = useRef<{ x: number; y: number; timer: number; fired: boolean } | null>(null);
   const endPress = () => window.clearTimeout(press.current?.timer);
@@ -330,13 +335,15 @@ export function Paragraph(props: {
         }}
       >
         {shown.text}
-        <SegmentMarks seg={seg} />
+        {parts.map((p) => (
+          <SegmentMarks key={p.id} seg={p} />
+        ))}
       </div>
       {props.open ? (
         <div className="tx-source">
-          {shown.untranslated ? null : (
+          {parts.every((p) => shownText(p).untranslated) ? null : (
             <p className="tx-ref" lang="en">
-              {seg.source}
+              {parts.map((p) => p.source).join(" ")}
             </p>
           )}
           <div className="tx-actions">

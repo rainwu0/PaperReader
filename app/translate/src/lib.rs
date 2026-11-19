@@ -9,6 +9,7 @@
 
 mod cancel;
 pub mod check;
+pub mod continuation;
 mod device;
 pub mod digest;
 pub mod download;
@@ -34,7 +35,10 @@ pub use digest::{
 };
 pub use engines::{EngineInfo, EngineKind, LangSupport, Need, engines};
 pub use error::{ErrorKind, Result, TranslateError};
-pub use job::{BatchEvent, BatchItem, JobSummary, run_job};
+pub use job::{
+    BatchEvent, BatchItem, FinalPassItem, FinalPassSummary, JobSummary, final_pass_targets,
+    run_final_pass, run_job,
+};
 pub use mt::{deepl_target, google_code};
 pub use prompt::{
     BUILTIN_PRESETS, BuiltinPreset, BuiltinSection, DEFAULT_DIGEST_PRESET, DEFAULT_PRESET,
@@ -142,12 +146,18 @@ pub struct Params {
     pub refine: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Segment {
     pub id: String,
     pub text: String,
     /// 這一段前面的原文（只給對話模型當前後文，不會被翻譯）。一批只用第一段的。
     pub before: Option<String>,
+    /// 接續：這一段接著哪一段讀（跨欄、跨頁被切開的同一句，`continuation.rs`）。同批送出，在段落之外註明。
+    pub continues: Option<String>,
+    /// 這一段後面接著的原文（只給對話模型當前後文）：接續的前一段單獨重翻時帶上另一半。
+    pub after: Option<String>,
+    /// 這一段是論文的篇名（首頁的篇名）：譯文後面附上的整段原文拿掉。
+    pub title: bool,
 }
 
 /// 快速翻譯的連線逾時（全文翻譯是 15 秒）。
@@ -174,6 +184,8 @@ pub struct Engine {
     terms: Mutex<Vec<PaperTerm>>,
     /// 這一批到目前為止回覆附的 `<terms>`（含單段重翻的）；`run_job` 定下譯文之後交給 `learn_terms`。
     proposed: Mutex<Vec<(String, String)>>,
+    /// 這次工作裡每個（原文詞, 譯法）用過幾批（`learn_terms`）。
+    tally: Mutex<std::collections::HashMap<(String, String), u32>>,
 }
 
 impl Engine {
@@ -220,6 +232,7 @@ impl Engine {
             last_request: Mutex::new(None),
             terms: Mutex::new(Vec::new()),
             proposed: Mutex::new(Vec::new()),
+            tally: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -240,6 +253,7 @@ impl Engine {
             last_request: Mutex::new(None),
             terms: Mutex::new(Vec::new()),
             proposed: Mutex::new(Vec::new()),
+            tally: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -275,7 +289,8 @@ impl Engine {
             return 0;
         }
         let mut t = self.terms.lock().unwrap_or_else(|p| p.into_inner());
-        learn_terms(&mut t, found, sources, outputs, glossary)
+        let mut tally = self.tally.lock().unwrap_or_else(|p| p.into_inner());
+        learn_terms(&mut t, &mut tally, found, sources, outputs, glossary)
     }
 
     /// 到目前為止服務回報的用量（對話模型才有；其他引擎是 0）。
@@ -468,6 +483,7 @@ impl Engine {
                     id: "1".to_string(),
                     text: input.text,
                     before: None,
+                    ..Default::default()
                 };
                 let mut out = self
                     .retrying(cancel, || self.once(params, std::slice::from_ref(&seg)))
@@ -508,6 +524,7 @@ impl Engine {
             id: "1".to_string(),
             text: "The model is trained on a large corpus.".to_string(),
             before: None,
+            ..Default::default()
         };
         let mut out = self
             .translate_batch(params, std::slice::from_ref(&seg), cancel)

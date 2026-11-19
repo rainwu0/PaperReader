@@ -160,7 +160,7 @@ export function useGenerateJob<S extends JobLike>(opts: {
     noText: StringKey,
     recordPages = false,
     layoutModel = false,
-  ): Promise<{ source: Material; segments: SegmentInput[] } | null> => {
+  ): Promise<{ source: Material; segments: SegmentInput[]; modelPages: number[] } | null> => {
     const source = detail ? sourcePdf(detail.paper.materials) : undefined;
     if (!source) throw new AppError("NotFound", "no source");
     stopAnalysis.current = false;
@@ -175,7 +175,7 @@ export function useGenerateJob<S extends JobLike>(opts: {
     // 大檔分段讀取：開檔途中按停止也能停（精讀與首頁的修正）。開 PDF 排進共用的佇列（優先），抽段落的期間
     // 逐篇處理讓路（產生畫面開著時不同時開另一份 PDF）
     const releasePerPaper = holdPerPaper();
-    const segments = await enqueuePdf("urgent", () =>
+    const extracted = await enqueuePdf("urgent", () =>
       withPdf(
         paperId,
         source.id,
@@ -186,16 +186,17 @@ export function useGenerateJob<S extends JobLike>(opts: {
         stopped,
       ),
     ).finally(releasePerPaper);
-    if (segments === null || !alive.current) {
+    if (extracted === null || !alive.current) {
       setPhase("panel");
       return null;
     }
+    const { segments, modelPages } = extracted;
     if (segments.length === 0) {
       setPhase("panel");
       setError({ message: t(noText) });
       return null;
     }
-    return { source, segments };
+    return { source, segments, modelPages };
   };
 
   const cancel = () => {

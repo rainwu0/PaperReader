@@ -71,6 +71,7 @@ fn diverge(p: &mut Pair) {
         p.a.create_overlay(
             &alpha,
             OverlayDraft {
+                layout_model_pages: Vec::new(),
                 source_material: am.clone(),
                 provider: "x".into(),
                 model: "y".into(),

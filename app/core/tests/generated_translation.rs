@@ -28,6 +28,7 @@ fn setup() -> Fx {
         .create_overlay(
             &paper,
             OverlayDraft {
+                layout_model_pages: Vec::new(),
                 source_material: source,
                 provider: "anthropic".into(),
                 model: "m".into(),
@@ -428,6 +429,7 @@ fn a_listed_generated_pdf_whose_file_is_gone_keeps_its_name() {
         .create_overlay(
             &fx.paper.clone(),
             OverlayDraft {
+                layout_model_pages: Vec::new(),
                 source_material: source,
                 provider: "anthropic".into(),
                 model: "m".into(),

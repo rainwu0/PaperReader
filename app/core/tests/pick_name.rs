@@ -55,6 +55,7 @@ fn a_new_overlay_does_not_reuse_a_listed_name_whose_file_is_gone() {
         lib.create_overlay(
             &paper,
             OverlayDraft {
+                layout_model_pages: Vec::new(),
                 source_material: source.clone(),
                 provider: "deepl".into(),
                 model: String::new(),

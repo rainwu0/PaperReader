@@ -222,6 +222,7 @@ fn overlay(segs: Vec<OverlaySegment>) -> OverlayFile {
         modified_by: None,
         segments: segs,
         terms: vec![],
+        layout_model_pages: vec![],
         extra: Default::default(),
     }
 }
@@ -379,4 +380,33 @@ fn overlay_header_kept_local() {
     let (o, _) = om(&l, &r, &[]);
     let o = o.unwrap();
     assert_eq!(o.provider, "p");
+}
+
+/// 用版面模型分段的頁跟著檔頭：兩份相同時不動；本機沒有記（較舊的寫入）時用另一台的；兩邊都有、不同時留本機的。
+#[test]
+fn overlay_layout_model_pages_survive_a_merge() {
+    let mut l = overlay(vec![seg("g1", "pending", None, None)]);
+    l.layout_model_pages = vec![0, 1];
+    let mut r = overlay(vec![seg("g1", "done", Some("x"), None)]);
+    r.layout_model_pages = vec![0, 1];
+    let (o, _) = om(&l, &r, &[]);
+    assert_eq!(o.unwrap().layout_model_pages, vec![0, 1]);
+
+    let mut empty = l.clone();
+    empty.layout_model_pages = vec![];
+    let (o, _) = om(&empty, &r, &[]);
+    assert_eq!(o.unwrap().layout_model_pages, vec![0, 1]);
+    // 只差這個欄位也要寫
+    let mut same = r.clone();
+    same.layout_model_pages = vec![];
+    let (o, _) = om(&same, &r, &[]);
+    assert_eq!(
+        o.expect("the local copy lost the pages").layout_model_pages,
+        vec![0, 1]
+    );
+
+    let mut other = r.clone();
+    other.layout_model_pages = vec![2];
+    let (o, _) = om(&l, &other, &[]);
+    assert_eq!(o.unwrap().layout_model_pages, vec![0, 1]);
 }

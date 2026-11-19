@@ -5,10 +5,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   editMark,
+  joinedText,
   nearestSegment,
   newestFirst,
   pdfBehind,
   preferredTranslation,
+  readingUnits,
+  continuationsFor,
   segmentAt,
   shownText,
   tableOfContents,
@@ -140,4 +143,41 @@ test("材料依做出來的時間排：最新的在前，沒有時間的排最�
     newestFirst([m("a"), m("b")]).map((x) => x.id),
     ["a", "b"],
   );
+});
+
+test("接續：前後兩段接成一段，夾在中間的圖說排到後面；三段接成一段；對不上的不理", () => {
+  const segs = ["a", "b", "cap", "c", "d", "e"].map((id) => seg(id, 0, [0, 0, 1, 1], id === "cap" ? { kind: "caption" } : {}));
+  const ids = (units) => units.map((u) => u.map((s) => s.id).join("+"));
+  assert.deepEqual(ids(readingUnits(segs, [])), ["a", "b", "cap", "c", "d", "e"]);
+  assert.deepEqual(ids(readingUnits(segs, [["b", "c"]])), ["a", "b+c", "cap", "d", "e"]);
+  assert.deepEqual(ids(readingUnits(segs, [["b", "c"], ["c", "d"]])), ["a", "b+c+d", "cap", "e"]);
+  // 不認得的代號、往回接的都不理
+  assert.deepEqual(ids(readingUnits(segs, [["x", "a"], ["d", "a"]])), ["a", "b", "cap", "c", "d", "e"]);
+});
+
+test("接續的譯文：中文直接接上，英文（沒翻的）中間空一格", () => {
+  const a = seg("a", 0, [0, 0, 1, 1], { target: "我們的直覺是，至少在局部鄰域內，機器人" });
+  const b = seg("b", 1, [0, 0, 1, 1], { target: "應以一致的方式行動。" });
+  assert.deepEqual(joinedText([a, b]), { text: "我們的直覺是，至少在局部鄰域內，機器人應以一致的方式行動。", untranslated: false });
+  const c = seg("c", 1, [0, 0, 1, 1], { status: "pending", target: null, source: "should act consistently." });
+  const d = seg("d", 0, [0, 0, 1, 1], { status: "pending", target: null, source: "the robot" });
+  assert.deepEqual(joinedText([d, c]), { text: "the robot should act consistently.", untranslated: true });
+  assert.equal(joinedText([a, c]).text, "我們的直覺是，至少在局部鄰域內，機器人should act consistently.");
+  assert.equal(joinedText([a, c]).untranslated, true);
+});
+
+test("接續清單：換了譯本先清掉；讀回來的是別份的不用；讀不到就是空的", () => {
+  let st = continuationsFor(null, { type: "open", overlayId: "a" });
+  st = continuationsFor(st, { type: "loaded", overlayId: "a", pairs: [["g0001", "g0002"]] });
+  assert.deepEqual(st.pairs, [["g0001", "g0002"]]);
+  // 換到另一份：還沒讀回來之前沒有接續
+  st = continuationsFor(st, { type: "open", overlayId: "b" });
+  assert.deepEqual(st.pairs, []);
+  // 上一份晚到的結果不用
+  st = continuationsFor(st, { type: "loaded", overlayId: "a", pairs: [["g0001", "g0002"]] });
+  assert.deepEqual(st.pairs, []);
+  st = continuationsFor(st, { type: "loaded", overlayId: "b", pairs: [["g0003", "g0004"]] });
+  assert.deepEqual(st.pairs, [["g0003", "g0004"]]);
+  st = continuationsFor(st, { type: "failed", overlayId: "b" });
+  assert.deepEqual(st.pairs, []);
 });

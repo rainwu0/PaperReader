@@ -13,6 +13,7 @@
 // 這個檔案只依賴 `layout.ts`，Node 的測試可以直接引入。
 
 import {
+  joinText,
   layoutPages,
   segmentOf,
   type LayoutSegment,
@@ -313,11 +314,12 @@ function pageSegments(pi: number, page: PageInput, rules: LayoutSegment[], boxes
     ...kept.map((r) => ({ bbox: r.bbox, region: r })),
     ...[...orphans.entries()].map(([seg, its]): Block => ({ bbox: rsegs[seg] ?? [0, 0, 0, 0], orphan: { seg, items: its } })),
   ];
-  const out: LayoutSegment[] = [];
+  // 每一段記下它的字來自哪幾個規則段落
+  const made: Array<{ seg: LayoutSegment; from: Set<number> }> = [];
   for (const b of orderBlocks(blocks)) {
     if (b.orphan) {
       const s = segmentOf(pi, b.orphan.items.map((it) => it.raw), rules[b.orphan.seg]?.kind ?? "body");
-      if (s) out.push(s);
+      if (s) made.push({ seg: s, from: new Set([b.orphan.seg]) });
       continue;
     }
     const r = b.region;
@@ -326,8 +328,41 @@ function pageSegments(pi: number, page: PageInput, rules: LayoutSegment[], boxes
     const its = r.items.filter((it) => it.rseg !== null);
     if (its.length === 0) continue;
     const s = segmentOf(pi, its.map((it) => it.raw), kindOf(r.role));
-    if (s) out.push(s);
+    if (s) made.push({ seg: s, from: new Set(its.map((it) => it.rseg ?? -1)) });
   }
+  return mergeSplitHeadings(made, rules);
+}
+
+/**
+ * 模型把規則的同一段標題切成兩個框（篇名的最後一行另得一個本文框）：前後兩段的字都只來自同一個規則的標題段落時，
+ * 併回一段標題，免得同一個篇名翻兩次。本文被切開不在這裡處理。
+ */
+function mergeSplitHeadings(made: Array<{ seg: LayoutSegment; from: Set<number> }>, rules: LayoutSegment[]): LayoutSegment[] {
+  const only = (from: Set<number>) => (from.size === 1 ? [...from][0] ?? null : null);
+  const out: Array<{ seg: LayoutSegment; rule: number | null }> = [];
+  for (const m of made) {
+    const rule = only(m.from);
+    const prev = out[out.length - 1];
+    if (prev && rule !== null && prev.rule === rule && rules[rule]?.kind === "heading") {
+      const a = prev.seg.bbox;
+      const b = m.seg.bbox;
+      prev.seg = {
+        ...prev.seg,
+        kind: "heading",
+        source: joinText(prev.seg.source, m.seg.source),
+        bbox: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])],
+      };
+      continue;
+    }
+    out.push({ seg: m.seg, rule });
+  }
+  return out.map((m) => m.seg);
+}
+
+/** 依模型分段的頁（頁序）：模型認出區塊的頁。模型沒跑、或一個區塊都沒認出的頁，段落等於照規則，不算。 */
+export function modelPages(pageCount: number, regions: readonly (PageRegions | undefined)[]): number[] {
+  const out: number[] = [];
+  for (let pi = 0; pi < pageCount; pi++) if ((regions[pi]?.length ?? 0) > 0) out.push(pi);
   return out;
 }
 

@@ -18,13 +18,17 @@ use paperreader_core::overlay::{
     STATUS_FAILED, SegmentDraft, SegmentService, SegmentUpdate, TERM_CANDIDATE, TERM_LEARNED,
     TERM_REMOVED, TERM_USER,
 };
+use paperreader_translate::continuation::{Placed, continuations};
 use paperreader_translate::glossary::{self, Term};
+use paperreader_translate::text::{drop_repeated_glosses, glosses};
 use paperreader_translate::{
-    BUILTIN_PRESETS, Cancel, DigestInput, DigestSegment, Engine, EngineConfig, Need, PaperTerm,
-    Params, PresetKind, PromptPreview, Provider, QuickInput, Segment, TermState, TokenUsage,
-    digest_preview, quick_preview, refine_preview, run_job, terms_in_use, translate_preview,
+    BUILTIN_PRESETS, BatchEvent, Cancel, DigestInput, DigestSegment, Engine, EngineConfig,
+    FinalPassItem, Need, PaperTerm, Params, PresetKind, PromptPreview, Provider, QuickInput,
+    Segment, TermState, TokenUsage, digest_preview, final_pass_targets, quick_preview,
+    refine_preview, run_final_pass, run_job, terms_in_use, translate_preview,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
@@ -74,6 +78,8 @@ pub struct SettingsView {
     /// 內建的在前（改過的是改過的內容），自訂的在後；兩種用途都在。
     pub prompts: Vec<PresetView>,
     pub refine: bool,
+    /// 收尾重翻。
+    pub final_pass: bool,
     /// 離線引擎的語言模型只在 Wi-Fi 下載（在 Firefox 翻譯那一筆的頁面裡設）。
     pub wifi_only: bool,
     /// 這個平台能不能安全地存金鑰（Android 以外不能）。
@@ -162,6 +168,7 @@ async fn settings_view(app: &AppHandle, t: TranslateSettings) -> SettingsView {
         digest_prompt: t.digest_prompt,
         prompts,
         refine: t.refine,
+        final_pass: t.final_pass,
         wifi_only: t.wifi_only,
         secrets_supported: supported,
         last_service: t.last_service,
@@ -193,6 +200,7 @@ pub struct SettingsPatch {
     pub digest_prompt: Option<String>,
     pub prompts: Option<Vec<PromptPreset>>,
     pub refine: Option<bool>,
+    pub final_pass: Option<bool>,
     pub wifi_only: Option<bool>,
     /// 這次用來翻的服務。不在服務清單裡的不記。
     pub last_service: Option<String>,
@@ -243,6 +251,9 @@ pub async fn translate_settings_patch(
                 }
                 if let Some(v) = patch.refine {
                     t.refine = v;
+                }
+                if let Some(v) = patch.final_pass {
+                    t.final_pass = v;
                 }
                 if let Some(v) = patch.wifi_only {
                     t.wifi_only = v;
@@ -373,6 +384,7 @@ pub async fn prompt_preview(
         id: "g0001".to_string(),
         text: TEST_SENTENCE.to_string(),
         before: Some(SAMPLE_BEFORE.to_string()),
+        ..Default::default()
     };
     Ok(match preset.kind {
         PresetKind::Translation => {
@@ -902,6 +914,7 @@ pub async fn translate_test(
         id: "1".to_string(),
         text: TEST_SENTENCE.to_string(),
         before: None,
+        ..Default::default()
     };
     let started = std::time::Instant::now();
     let mut out = engine
@@ -945,6 +958,7 @@ pub async fn overlay_create(
     paper_id: String,
     source_material: String,
     segments: Vec<SegmentInput>,
+    layout_model_pages: Option<Vec<u32>>,
     service: String,
 ) -> ApiResult<OverlayCreated> {
     let t = state.translate_settings();
@@ -980,6 +994,7 @@ pub async fn overlay_create(
                         source: g.source,
                     })
                     .collect(),
+                layout_model_pages: layout_model_pages.unwrap_or_default(),
             };
             s.with_lib(|l| {
                 let (_, token) = l.get_paper(&paper_id)?;
@@ -1014,6 +1029,120 @@ pub async fn overlay_read(
             l.read_overlay(&paper_id, &material_id).map(|(d, _)| d)
         })
         .await
+}
+
+/// 一份譯本裡跨欄、跨頁被切成前後兩段的句子（接續）：每一對是（前一段, 後一段）的代號。譯文檢視用它把兩段接成一段。
+#[tauri::command]
+pub async fn overlay_continuations(
+    state: State<'_, AppState>,
+    paper_id: String,
+    material_id: String,
+) -> ApiResult<Vec<(String, String)>> {
+    let doc = state
+        .lib("overlay_continuations", move |l| {
+            l.read_overlay(&paper_id, &material_id).map(|(d, _)| d)
+        })
+        .await?;
+    Ok(continuation_pairs(&doc)
+        .into_iter()
+        .map(|(a, b)| (doc.segments[a].id.clone(), doc.segments[b].id.clone()))
+        .collect())
+}
+
+/// 接續的（前一段, 後一段）位置（`paperreader_translate::continuation`）：只在建立譯本時用版面模型分段的頁上認
+/// （譯文疊加檔的 `layout_model_pages`）。
+fn continuation_pairs(doc: &OverlayFile) -> Vec<(usize, usize)> {
+    let by_model: HashSet<u32> = doc.layout_model_pages.iter().copied().collect();
+    let placed: Vec<Placed> = doc
+        .segments
+        .iter()
+        .map(|g| Placed {
+            page: g.page,
+            bbox: g.bbox,
+            kind: &g.kind,
+            size: g.size,
+            by_model: by_model.contains(&g.page),
+            source: &g.source,
+        })
+        .collect();
+    continuations(&placed)
+}
+
+/// 前後文最多幾個字。
+const CONTEXT_CHARS: usize = 400;
+
+/// 送去翻的段落（`pick` 挑位置）：前一段原文的結尾當前文。跨欄、跨頁的接續記下它接著哪一段，前文用那一段的結尾。
+fn job_segments(doc: &OverlayFile, pick: impl Fn(usize) -> bool) -> Vec<Segment> {
+    let follows: HashMap<usize, usize> = continuation_pairs(doc)
+        .into_iter()
+        .map(|(a, b)| (b, a))
+        .collect();
+    // 篇名：首頁的第一個標題
+    let title = doc
+        .segments
+        .iter()
+        .position(|g| g.page == 0 && g.kind == "heading");
+    doc.segments
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| pick(*i))
+        .map(|(i, g)| {
+            let first_half = follows.get(&i).copied();
+            // 前文是前一段（接續的話是它接著的那一段）的最後一部分：離這一段最近的字
+            let before = first_half
+                .or_else(|| i.checked_sub(1))
+                .map_or(String::new(), |p| {
+                    let v: Vec<char> = doc.segments[p].source.chars().collect();
+                    v[v.len().saturating_sub(CONTEXT_CHARS)..].iter().collect()
+                });
+            Segment {
+                id: g.id.clone(),
+                text: g.source.clone(),
+                before: (!before.is_empty()).then_some(before),
+                continues: first_half.map(|a| doc.segments[a].id.clone()),
+                after: None,
+                title: title == Some(i),
+            }
+        })
+        .collect()
+}
+
+/// 同一個括號英文在一篇裡只留第一次（依原文的順序）：記著每一段現在的譯文附了哪些括號英文。
+struct Glosses {
+    at: HashMap<String, usize>,
+    per_segment: Vec<Vec<String>>,
+}
+
+impl Glosses {
+    fn new(doc: &OverlayFile) -> Glosses {
+        Glosses {
+            at: doc
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (g.id.clone(), i))
+                .collect(),
+            per_segment: doc
+                .segments
+                .iter()
+                .map(|g| match (&g.target, g.status == STATUS_DONE) {
+                    (Some(t), true) => glosses(t),
+                    _ => Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 這一段新的譯文：前面的段落附過的括號英文拿掉，記下這一段留下的。
+    fn apply(&mut self, id: &str, text: &str) -> String {
+        let Some(&i) = self.at.get(id) else {
+            return text.to_string();
+        };
+        let mut seen: HashSet<String> = self.per_segment[..i].iter().flatten().cloned().collect();
+        let out = drop_repeated_glosses(text, &mut seen);
+        self.per_segment[i] = glosses(&out);
+        out
+    }
 }
 
 /// 讀譯本與篇名（`command` 是記錄用的指令名稱）。
@@ -1114,20 +1243,10 @@ pub async fn translate_run(
         .filter(|g| g.status == STATUS_DONE)
         .map(|g| g.id.clone())
         .collect();
-    // 前一段的原文當前後文（不管前一段翻了沒有）
-    let pending: Vec<Segment> = doc
-        .segments
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| needs_translation(g))
-        .map(|(i, g)| Segment {
-            id: g.id.clone(),
-            text: g.source.clone(),
-            before: i
-                .checked_sub(1)
-                .map(|p| doc.segments[p].source.chars().take(400).collect()),
-        })
-        .collect();
+    // 前一段的原文當前後文（不管前一段翻了沒有）；接續的後一段用它接著的那一段
+    let pending: Vec<Segment> = job_segments(&doc, |i| needs_translation(&doc.segments[i]));
+    let mut glossed = Glosses::new(&doc);
+    let final_pass = t.final_pass;
     let params = params_for(
         &state,
         &t,
@@ -1149,7 +1268,14 @@ pub async fn translate_run(
     let state = state.inner().clone();
     tauri::async_runtime::spawn(async move {
         let mut written = engine.paper_terms();
-        let summary = run_job(&engine, &params, pending, &cancel, |ev| {
+        // 一批結果寫進譯本；`final_pass` 是收尾重翻換掉的段落（不算進進度）
+        let mut sink = |mut ev: BatchEvent, final_pass: bool| {
+            // 同一個括號英文在這篇前面出現過就拿掉
+            for it in &mut ev.items {
+                if let Ok(text) = &it.result {
+                    it.result = Ok(glossed.apply(&it.id, text));
+                }
+            }
             // 用量：一批一批記下（中途停下也留著）
             let used = meter.flush(&state, &engine);
             status.input_tokens = used.input;
@@ -1189,34 +1315,44 @@ pub async fn translate_run(
             if wrote.is_err() {
                 return false;
             }
-            for it in &ev.items {
-                match it.result {
-                    Ok(_) => status.done += 1,
-                    Err(_) => status.failed += 1,
+            if !final_pass {
+                for it in &ev.items {
+                    match it.result {
+                        Ok(_) => status.done += 1,
+                        Err(_) => status.failed += 1,
+                    }
                 }
             }
             publish(&slot, &status);
             true
-        })
-        .await;
+        };
+        let summary = run_job(&engine, &params, pending, &cancel, |ev| sink(ev, false)).await;
+        let mut final_summary = None;
+        // 收尾重翻：翻完（沒有取消、沒有停下）才做，只對對話模型
+        if final_pass
+            && engine.provider().is_chat_model()
+            && !summary.cancelled
+            && summary.stopped.is_none()
+            && !summary.sink_failed
+            && let Ok((doc, _)) = state.with_lib(|l| l.read_overlay(&paper_id, &material_id))
+        {
+            let items = final_pass_items(&doc, &terms_in_use(&engine.paper_terms()));
+            if !items.is_empty() {
+                final_summary = Some(
+                    run_final_pass(&engine, &params, items, &cancel, |ev| sink(ev, true)).await,
+                );
+            }
+        }
         // 最後一批之後還有用量（讀不懂而縮小批次再試、停下前的那一次）
         let used = meter.flush(&state, &engine);
         status.input_tokens = used.input;
         status.output_tokens = used.output;
-        status.state = if summary.cancelled {
-            JobState::Cancelled
-        } else if summary.stopped.is_some() || summary.sink_failed {
-            JobState::Stopped
-        } else {
-            JobState::Finished
-        };
-        status.reason = if summary.sink_failed {
-            Some(ErrorKind::Io)
-        } else {
-            summary.stopped.map(api_kind)
-        };
+        (status.state, status.reason) = final_state(&summary, final_summary.as_ref());
+        let stopped = summary
+            .stopped
+            .or(final_summary.as_ref().and_then(|f| f.stopped));
         // 服務停擺（不是金鑰或設定的問題）：找依序的下一個服務，讓畫面問使用者要不要換
-        if summary.stopped.is_some_and(offers_fallback) {
+        if stopped.is_some_and(offers_fallback) {
             let next = state
                 .translate_settings()
                 .next_fallback(&status.service)
@@ -1276,19 +1412,8 @@ pub async fn translate_compare(
     }
     let t = state.translate_settings();
     let (doc, title) = read_doc(&state, "translate_compare", &paper_id, &material_id).await?;
-    let segs: Vec<Segment> = segment_ids
-        .iter()
-        .filter_map(|id| {
-            let i = doc.segments.iter().position(|g| &g.id == id)?;
-            Some(Segment {
-                id: id.clone(),
-                text: doc.segments[i].source.clone(),
-                before: i
-                    .checked_sub(1)
-                    .map(|p| doc.segments[p].source.chars().take(400).collect()),
-            })
-        })
-        .collect();
+    let wanted: HashSet<&String> = segment_ids.iter().collect();
+    let segs: Vec<Segment> = job_segments(&doc, |i| wanted.contains(&doc.segments[i].id));
     let params = Params {
         refine: false,
         ..params_for(
@@ -1347,6 +1472,61 @@ pub async fn translate_compare(
 
 fn summary_error(sum: &paperreader_translate::JobSummary) -> Option<ErrorKind> {
     sum.stopped.map(api_kind)
+}
+
+/// 收尾重翻要送的段落：原文有這篇已定的術語、譯文卻沒用那個譯法的已翻段落（使用者決定的除外），
+/// 接續的另一段一起送；最多全篇段數的一成。
+fn final_pass_items(doc: &OverlayFile, terms: &[(String, String)]) -> Vec<FinalPassItem> {
+    let segs: Vec<(&str, Option<&str>, bool)> = doc
+        .segments
+        .iter()
+        .map(|g| {
+            let done = g.status == STATUS_DONE;
+            (
+                g.source.as_str(),
+                g.target.as_deref().filter(|_| done),
+                g.by_user,
+            )
+        })
+        .collect();
+    let limit = (doc.segments.len() / 10).max(1);
+    let pairs = continuation_pairs(doc);
+    let picked: HashSet<usize> = final_pass_targets(&segs, terms, limit, &pairs)
+        .into_iter()
+        .collect();
+    job_segments(doc, |i| picked.contains(&i))
+        .into_iter()
+        .filter_map(|segment| {
+            let g = doc.segments.iter().find(|g| g.id == segment.id)?;
+            Some(FinalPassItem {
+                current: g.target.clone()?,
+                segment,
+            })
+        })
+        .collect()
+}
+
+/// 工作最後的狀態與原因：翻譯本身與收尾重翻（有做的話）的取消、停下、寫入失敗都算。
+fn final_state(
+    job: &paperreader_translate::JobSummary,
+    fp: Option<&paperreader_translate::FinalPassSummary>,
+) -> (JobState, Option<ErrorKind>) {
+    let cancelled = job.cancelled || fp.is_some_and(|f| f.cancelled);
+    let sink_failed = job.sink_failed || fp.is_some_and(|f| f.sink_failed);
+    let stopped = job.stopped.or(fp.and_then(|f| f.stopped));
+    let state = if cancelled {
+        JobState::Cancelled
+    } else if stopped.is_some() || sink_failed {
+        JobState::Stopped
+    } else {
+        JobState::Finished
+    };
+    let reason = if sink_failed {
+        Some(ErrorKind::Io)
+    } else {
+        stopped.map(api_kind)
+    };
+    (state, reason)
 }
 
 /// 這一段要不要送翻：只有還沒翻好的（`pending`、`failed`）。已翻的、使用者決定的都不送。
@@ -1926,6 +2106,7 @@ mod tests {
         use paperreader_translate::learn_terms;
         let p = |s: &str, t: &str| (s.to_string(), t.to_string());
         let mut known = Vec::new();
+        let mut tally = std::collections::HashMap::new();
         let src = ["The token, the Token and the stretch."];
         let out = ["權杖、符記、詞元、伸展、拉伸"];
         for found in [
@@ -1933,7 +2114,7 @@ mod tests {
             vec![p("token", "詞元"), p("stretch", "拉伸")],
             vec![p("TOKEN", "詞元"), p("stretch", "伸展")],
         ] {
-            learn_terms(&mut known, found, &src, &out, &[]);
+            learn_terms(&mut known, &mut tally, found, &src, &out, &[]);
             let overlay = super::to_overlay_terms(&known, &[]);
             assert!(
                 paperreader_core::overlay::validate_terms(&overlay).is_ok(),
@@ -1992,5 +2173,147 @@ mod tests {
         assert_eq!(ups[0].status, "failed");
         assert_eq!(ups[1].status, "done");
         assert!(ups.iter().all(|u| !u.by_user));
+    }
+
+    fn doc(segs: Vec<super::OverlaySegment>, model_pages: Vec<u32>) -> super::OverlayFile {
+        serde_json::from_value::<super::OverlayFile>(serde_json::json!({
+            "format": 1, "source_material": "m", "provider": "p", "model": "", "target_lang": "zh-TW",
+            "segments": []
+        }))
+        .map(|mut d| {
+            d.segments = segs;
+            d.layout_model_pages = model_pages;
+            d
+        })
+        .unwrap()
+    }
+
+    fn at(
+        id: &str,
+        page: u32,
+        x0: f64,
+        kind: &str,
+        source: &str,
+        status: &str,
+    ) -> super::OverlaySegment {
+        super::OverlaySegment {
+            id: id.into(),
+            page,
+            bbox: [x0, 100.0, x0 + 200.0, 300.0],
+            kind: kind.into(),
+            size: Some(10.0),
+            source: source.into(),
+            ..seg(status, None)
+        }
+    }
+
+    /// 首頁的第一個標題是篇名；接續只在記下用版面模型分段的頁上認。
+    #[test]
+    fn the_title_and_continuations_are_marked_on_the_segments() {
+        let segs = vec![
+            at(
+                "g0001",
+                0,
+                50.0,
+                "heading",
+                "A Title of the Paper Here",
+                "pending",
+            ),
+            at("g0002", 0, 50.0, "heading", "1 Introduction", "pending"),
+            at(
+                "g0003",
+                0,
+                50.0,
+                "body",
+                "Our intuition is that the robot",
+                "done",
+            ),
+            at(
+                "g0004",
+                0,
+                320.0,
+                "body",
+                "should act consistently.",
+                "pending",
+            ),
+        ];
+        let d = doc(segs.clone(), vec![0]);
+        let out = super::job_segments(&d, |_| true);
+        assert!(out[0].title && !out[1].title && !out[2].title);
+        assert_eq!(out[3].continues.as_deref(), Some("g0003"));
+        let rules = super::job_segments(&doc(segs, vec![]), |_| true);
+        assert_eq!(rules[3].continues, None);
+    }
+
+    /// 收尾重翻挑到接續的一段，另一段一起送。
+    #[test]
+    fn the_final_pass_sends_both_halves() {
+        let mut segs = vec![
+            at("g0001", 0, 50.0, "body", "Each token of the", "done"),
+            at("g0002", 0, 320.0, "body", "sentence is kept.", "done"),
+        ];
+        segs[0].target = Some("每個符元的".into());
+        segs[1].target = Some("句子都保留。".into());
+        // 一成的上限要容得下兩段
+        for i in 3..=20 {
+            segs.push(at(
+                &format!("g{i:04}"),
+                1,
+                50.0,
+                "body",
+                "Other text.",
+                "done",
+            ));
+        }
+        let items =
+            super::final_pass_items(&doc(segs, vec![0]), &[("token".into(), "token".into())]);
+        let ids: Vec<&str> = items.iter().map(|i| i.segment.id.as_str()).collect();
+        assert_eq!(ids, vec!["g0001", "g0002"]);
+    }
+
+    /// 收尾重翻時取消或寫入失敗：最後的狀態照實顯示，不是完成。
+    #[test]
+    fn the_final_state_reflects_the_final_pass() {
+        use crate::translate::JobState;
+        use paperreader_translate::{FinalPassSummary, JobSummary};
+        let ok = JobSummary::default();
+        assert_eq!(super::final_state(&ok, None).0, JobState::Finished);
+        let cancelled = FinalPassSummary {
+            cancelled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::final_state(&ok, Some(&cancelled)).0,
+            JobState::Cancelled
+        );
+        let failed = FinalPassSummary {
+            sink_failed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::final_state(&ok, Some(&failed)),
+            (JobState::Stopped, Some(crate::error::ErrorKind::Io))
+        );
+    }
+
+    /// 前文是前一段的最後 400 字（接續與一般段落都一樣）。
+    #[test]
+    fn the_context_is_the_end_of_the_previous_segment() {
+        let long = format!("{} the last words.", "x".repeat(1000));
+        let segs = vec![
+            at("g0001", 0, 50.0, "body", &long, "done"),
+            at(
+                "g0002",
+                1,
+                50.0,
+                "body",
+                "A new paragraph starts here.",
+                "pending",
+            ),
+        ];
+        let out = super::job_segments(&doc(segs, vec![]), |i| i == 1);
+        let before = out[0].before.as_deref().unwrap();
+        assert_eq!(before.chars().count(), 400);
+        assert!(before.ends_with("the last words."), "{before}");
     }
 }

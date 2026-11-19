@@ -62,6 +62,7 @@ impl Fx {
             .create_overlay(
                 &self.paper,
                 OverlayDraft {
+                    layout_model_pages: Vec::new(),
                     source_material: self.source.clone(),
                     provider: "deepl".into(),
                     model: String::new(),

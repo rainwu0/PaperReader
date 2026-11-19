@@ -101,6 +101,7 @@ fn syncable_files_only() {
     lib.create_overlay(
         &p1.id,
         paperreader_core::overlay::OverlayDraft {
+            layout_model_pages: Vec::new(),
             source_material: m1,
             provider: "x".into(),
             model: "y".into(),

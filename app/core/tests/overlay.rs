@@ -50,6 +50,7 @@ impl Fx {
     }
     fn draft(&self, n: usize) -> OverlayDraft {
         OverlayDraft {
+            layout_model_pages: Vec::new(),
             source_material: self.material.clone(),
             provider: "anthropic".into(),
             model: "claude-test".into(),
@@ -875,4 +876,42 @@ fn bad_terms_are_refused_and_nothing_is_written() {
         );
         assert_eq!(fs::read(fx.overlay_path()).unwrap(), before, "case {i}");
     }
+}
+
+#[test]
+fn pages_segmented_by_the_layout_model_are_kept_in_the_header() {
+    let mut fx = setup();
+    // 沒有用版面模型：不寫出這個欄位，讀回是空的（0.1.5 之前的檔也是這樣）
+    let (mid, _) = fx.create(3);
+    assert!(fx.raw().get("layout_model_pages").is_none());
+    let (doc, _) = fx.lib.read_overlay(&fx.paper, &mid).unwrap();
+    assert!(doc.layout_model_pages.is_empty());
+
+    // 有用：依頁序排好、去掉重複；更新段落之後照樣留著
+    let mut fx = setup();
+    let mut draft = fx.draft(3);
+    draft.layout_model_pages = vec![3, 0, 3, 1];
+    let token = fx.paper_token();
+    let r = fx.lib.create_overlay(&fx.paper, draft, &token).unwrap();
+    assert_eq!(fx.raw()["layout_model_pages"], serde_json::json!([0, 1, 3]));
+    fx.lib
+        .update_overlay_segments(
+            &fx.paper,
+            &r.material_id,
+            &[update("g0001", STATUS_DONE, Some("一"))],
+            &r.overlay_token,
+        )
+        .unwrap();
+    let (doc, _) = fx.lib.read_overlay(&fx.paper, &r.material_id).unwrap();
+    assert_eq!(doc.layout_model_pages, vec![0, 1, 3]);
+    let back: OverlayFile = serde_json::from_value(serde_json::to_value(&doc).unwrap()).unwrap();
+    assert_eq!(back, doc);
+
+    // 頁序超出原文的頁數：不建立
+    let mut fx = setup();
+    let mut draft = fx.draft(3);
+    draft.layout_model_pages = vec![10];
+    let token = fx.paper_token();
+    let e = fx.lib.create_overlay(&fx.paper, draft, &token).unwrap_err();
+    assert!(matches!(e, LibError::InvalidInput { .. }), "{e:?}");
 }

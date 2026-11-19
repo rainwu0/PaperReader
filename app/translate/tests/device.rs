@@ -42,6 +42,7 @@ fn segs(n: usize) -> Vec<Segment> {
                 format!("Paragraph number {i} of the paper.")
             },
             before: None,
+            ..Default::default()
         })
         .collect()
 }
@@ -117,11 +118,13 @@ async fn control_characters_are_removed_before_sending() {
             id: "g0102".into(),
             text: "\u{0}x\u{1} where the loss is minimal".into(),
             before: Some("prev\u{1}".into()),
+            ..Default::default()
         },
         Segment {
             id: "g0103".into(),
             text: "Plain text.".into(),
             before: None,
+            ..Default::default()
         },
     ];
     let mut out: Vec<BatchItem> = Vec::new();

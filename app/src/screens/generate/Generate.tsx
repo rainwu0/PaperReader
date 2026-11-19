@@ -160,6 +160,7 @@ function TranslateGenerate(props: {
   const [serviceId, setServiceId] = useState<string | null>(null);
   const [promptPick, setPromptPick] = useState<string | null>(null);
   const [refinePick, setRefinePick] = useState<boolean | null>(null);
+  const [finalPick, setFinalPick] = useState<boolean | null>(null);
   const [existing, setExisting] = useState<Existing | null>(null);
 
   const loadExisting = async (d: PaperDetail) => {
@@ -235,6 +236,7 @@ function TranslateGenerate(props: {
     await api.patchTranslateSettings({
       prompt: promptPick ?? cfg.prompt,
       refine: refinePick ?? cfg.refine,
+      finalPass: finalPick ?? cfg.finalPass,
       lastService: service,
       ...(skipAsk && !cfg.skipConfirm ? { skipConfirm: true } : {}),
     });
@@ -298,7 +300,7 @@ function TranslateGenerate(props: {
         if (!materialId) {
           const read = await g.analyze("generate.noText", false, true);
           if (!read) return;
-          const created = await api.createOverlay(paperId, read.source.id, read.segments, service);
+          const created = await api.createOverlay(paperId, read.source.id, read.segments, read.modelPages, service);
           materialId = created.materialId;
           initial = { total: read.segments.length, done: 0 };
           props.onChanged?.();
@@ -623,6 +625,9 @@ function TranslateGenerate(props: {
                   />
                   <CheckRow checked={refinePick ?? cfg.refine} onChange={setRefinePick} hint={t("translate.panel.refineCost")}>
                     {t("translate.panel.refine")}
+                  </CheckRow>
+                  <CheckRow checked={finalPick ?? cfg.finalPass} onChange={setFinalPick} hint={t("translate.panel.finalPassAbout")}>
+                    {t("translate.panel.finalPass")}
                   </CheckRow>
                 </>
               ) : null}
