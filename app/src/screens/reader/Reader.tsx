@@ -12,7 +12,7 @@ import { BusyOverlay, Button, Details, IconButton, Toast, type ToastData } from 
 import { hintPending, markHintSeen, type HintId } from "../../hints";
 import { BackIcon, InfoIcon, ShareIcon } from "../../ui/icons";
 import { ExportSheet } from "../export/exportUi";
-import { AnimatePresence, fadeInElement, m as Motion, useMotion } from "../../ui/motion";
+import { AnimatePresence, fadeInElement, m as Motion, useMotion, useReducedMotion } from "../../ui/motion";
 import { CommentPane } from "./CommentPane";
 import { NotesPane } from "./NotesPane";
 import { PdfView, type OutlineEntry, type SwitchPosition, type ViewPosition } from "./pdfView";
@@ -41,6 +41,9 @@ import { CardPop, SegmentPop } from "./SegmentParts";
 import { pageRegionHint } from "../../ext/pageRegions";
 import { useReaderViews, type SegTarget } from "./useReaderViews";
 import { useHighlighting } from "./useHighlighting";
+import { QuickCard, useQuickTranslate } from "./QuickTranslate";
+import { offersQuick } from "./quickText";
+import type { SelectionCapture } from "./pdfView";
 import {
   BrushBar,
   brushStyleOf,
@@ -478,11 +481,14 @@ export function Reader(props: {
   });
   const { overlayActive, onSource } = views;
   const hlPopOpen = props.sheets.includes("hlPop");
+  // 選取文字的快速翻譯：卡片是導覽堆疊的一層，捲動、縮放、點卡片外就收起
+  const quick = useQuickTranslate(nav, props.sheets);
   // 捲動時每格都會來：收起只做一次（返回還沒完成之前不再退一層）
   const hlClosing = useRef(false);
   useEffect(() => {
     onMovedRef.current = () => {
       views.onMoved();
+      if (quick.isOpen) quick.close();
       // 捲動或縮放了：劃線的小選單收起（它對齊的位置已經不對）
       if (hlPopOpen && !hlClosing.current) {
         hlClosing.current = true;
@@ -532,6 +538,40 @@ export function Reader(props: {
     setToast,
   });
   const { selection, highlightMode } = hl;
+  // 拖選取的把手時按鈕列淡出（移除動畫時直接隱藏），放開後再出現
+  const reducedMotion = useReducedMotion() ?? false;
+  const pillMotion = hl.dragging
+    ? { ...popMotion, animate: { opacity: 0, transition: { duration: reducedMotion ? 0 : 0.12 } } }
+    : popMotion;
+
+  // ---------- 選取文字的快速翻譯 ----------
+  // 目標語言：選的已經是譯文的語言（譯本 PDF 上的中文）時不給「翻譯」（`quickText.offersQuick`）
+  const [targetLang, setTargetLang] = useState("zh-TW");
+  useEffect(() => {
+    api
+      .translateSettings()
+      .then((v) => setTargetLang(v.targetLang))
+      .catch(() => {});
+  }, []);
+  const quickSeq = useRef(0);
+  /** 選取上方浮出卡片：位置與前後各一句在這裡算一次；系統的選取收掉（卡片留著一份選取，劃線用它）。 */
+  const openQuick = (cap: SelectionCapture) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const rect = view.captureRect(cap) ?? cap.anchor;
+    const ctx = view.selectionContext(cap);
+    const insetTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inset-top")) || 0;
+    window.getSelection()?.removeAllRanges();
+    hl.setSelection(null);
+    quickSeq.current += 1;
+    quick.open({ cap, rect, before: ctx.before, after: ctx.after, topLimit: insetTop + (barVisible ? BAR_HEIGHT : 0) });
+  };
+  // 換了材料：卡片收起
+  useEffect(() => {
+    quick.close();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialId]);
+
   // ---------- 短評標記與短評窗格 ----------
   const [commentsShown, setCommentsShown] = useLocalPref(COMMENTS_KEY, true, isBool);
   // 筆刷開著（標記會擋住畫筆）、原頁疊譯文開著（劃線是蓋住的）時不顯示
@@ -658,8 +698,8 @@ export function Reader(props: {
   const lastTap = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
   useEffect(() => () => window.clearTimeout(lastTap.current?.timer), []);
   const singleTap = (x: number, y: number) => {
-    // 劃線的小選單開著：點別處只是收起它
-    if (props.sheets.includes("hlPop")) {
+    // 劃線的小選單、快速翻譯的卡片開著：點別處只是收起它
+    if (props.sheets.includes("hlPop") || quick.isOpen) {
       void nav.back();
       return;
     }
@@ -1122,7 +1162,15 @@ export function Reader(props: {
 
       <AnimatePresence>
         {selection && !overlayActive && !brushOn && !highlightMode ? (
-          <Motion.div key="pill" className="sel-pill" style={{ top: pillTop }} role="toolbar" aria-label={t("reader.tool.highlight")} {...popMotion}>
+          <Motion.div
+            key="pill"
+            className="sel-pill"
+            style={{ top: pillTop, pointerEvents: hl.dragging ? "none" : undefined }}
+            role="toolbar"
+            aria-label={t("reader.tool.highlight")}
+            aria-hidden={hl.dragging || undefined}
+            {...pillMotion}
+          >
             <button type="button" onClick={() => void hl.create(selection, false)}>
               {t("reader.tool.highlight")}
             </button>
@@ -1140,7 +1188,30 @@ export function Reader(props: {
             >
               {t("reader.highlight.paragraph")}
             </button>
+            {offersQuick(selection.exact, targetLang) ? (
+              <button type="button" onClick={() => openQuick(selection)}>
+                {t("quick.action")}
+              </button>
+            ) : null}
           </Motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {quick.target ? (
+          <QuickCard
+            key={`quick-${quickSeq.current}`}
+            paperId={paperId}
+            target={quick.target}
+            canMark={!overlayActive}
+            onComment={(text) => {
+              const cap = quick.target?.cap;
+              quick.close();
+              if (cap) void hl.create(cap, false, text);
+            }}
+            onFull={() => void nav.back().then(() => nav.push({ name: "generate", paperId }))}
+            onToast={setToast}
+          />
         ) : null}
       </AnimatePresence>
 

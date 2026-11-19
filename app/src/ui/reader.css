@@ -478,7 +478,7 @@
   translate: -50% 0; /* 個別的 translate：transform 留給轉換 */
   z-index: 9;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: wrap; /* 四顆鈕（含快速翻譯）在 360dp 寬的手機上放不下一行時換行，不伸出畫面 */
   justify-content: center;
   gap: 2px;
   width: max-content;
@@ -493,9 +493,9 @@
 .sel-pill button {
   min-height: var(--tap);
   min-width: var(--tap);
-  flex-shrink: 0;
+  flex-shrink: 0; /* 放不下時整顆換到下一行，不擠窄成一字一行 */
   white-space: nowrap;
-  padding: 0 14px;
+  padding: 0 12px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -1505,6 +1505,77 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ---------- 選取文字的快速翻譯：選取上方的卡片 ---------- */
+
+.quick-card {
+  z-index: 11; /* 在選字之後的鈕之上 */
+}
+
+.quick-card .seg-pop-actions {
+  flex-wrap: wrap;
+}
+
+/* 標題列：左邊是選了什麼（兩行以內），右上角是用哪個服務的小下拉 */
+.quick-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.quick-src {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.quick-svc {
+  flex: none;
+  max-width: 48%;
+  min-height: var(--tap); /* 按的範圍 48dp；字小、看起來是角落的小選單 */
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+}
+
+.quick-text {
+  flex: 1 1 auto;
+  min-height: 4.6em; /* 卡片矮的時候譯文至少看得到三行，其餘在這裡捲 */
+  white-space: pre-wrap;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.quick-note {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.quick-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-status {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* 改一段：輸入框隨內容長高（`field-sizing`；不支援的網頁元件用最小高度） */

@@ -29,6 +29,7 @@ pub fn run() {
             app.manage(AppState::new(settings, settings_path, recovered));
             app.manage(translate::JobSlot::<translate::JobStatus>::default());
             app.manage(commands::digest::DigestSlot::default());
+            app.manage(commands::translate::QuickCache::default());
             app.manage(std::sync::Arc::new(ondevice::Bridge::default()));
             app.manage(std::sync::Arc::new(ondevice::Downloads::default()));
             app.manage(std::sync::Arc::new(commands::layout::LayoutState::default()));
@@ -137,6 +138,7 @@ pub fn run() {
             commands::translate::translate_key_set,
             commands::translate::translate_key_clear,
             commands::translate::translate_test,
+            commands::translate::translate_quick,
             commands::translate::overlay_create,
             commands::translate::overlay_read,
             commands::translate::translate_run,

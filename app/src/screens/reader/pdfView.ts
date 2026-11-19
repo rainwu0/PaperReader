@@ -15,7 +15,8 @@ import { markerRoom, placeMarkers, type CommentAnchor } from "./commentLayout";
 import { coversFromInfo, filterChunk, type ChunkLike, type Covers, type TextItemLike } from "../../translate/textFilter";
 import { InkLayer, type BrushStyle, type InkStroke, type NewStroke } from "./pdfInk";
 import { attachPinch } from "./pdfPinch";
-import { captureSelection, firstVisibleLine, type SelectionCapture } from "./pdfSelection";
+import { captureSelection, firstVisibleLine, layerText, type SelectionCapture } from "./pdfSelection";
+import { sentenceContext } from "./quickText";
 import { makeTextLayer, startPdf, type MaterialRangeTransport } from "../../pdf/pdfSource";
 import type { PageRegion } from "../../ext/types";
 import { toRawItems } from "../../translate/extract";
@@ -1179,6 +1180,27 @@ export class PdfView {
    */
   captureSelection(): SelectionCapture | null {
     return captureSelection((n) => this.slots[n - 1]);
+  }
+
+  /** 一段選取在畫面上的範圍（快速翻譯的卡片對齊它，打開時算一次）。那一頁不在了交回 `null`。 */
+  captureRect(cap: SelectionCapture): { left: number; top: number; right: number; bottom: number } | null {
+    let out: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const r of cap.rects) {
+      const b = this.segmentRect(cap.pageIndex, r);
+      if (!b) continue;
+      out = out
+        ? { left: Math.min(out.left, b.left), top: Math.min(out.top, b.top), right: Math.max(out.right, b.right), bottom: Math.max(out.bottom, b.bottom) }
+        : b;
+    }
+    return out;
+  }
+
+  /** 選取前後各一句（同一頁的文字層；快速翻譯用）。 */
+  selectionContext(cap: SelectionCapture): { before: string | null; after: string | null } {
+    const tl = this.slots[cap.pageIndex]?.textLayer;
+    if (!tl) return { before: null, after: null };
+    const page = layerText(tl, cap.start, cap.end);
+    return sentenceContext(page.text, page.start, page.end);
   }
 
   /** 目前畫面裡第一行看得到的文字，當成「這一頁的短評」的依據（沒有選字時用）。 */

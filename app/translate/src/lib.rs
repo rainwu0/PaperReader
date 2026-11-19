@@ -23,6 +23,7 @@ pub mod layout_model;
 mod llm;
 mod mt;
 mod prompt;
+mod quick;
 pub mod text;
 
 pub use cancel::Cancel;
@@ -37,10 +38,15 @@ pub use job::{BatchEvent, BatchItem, JobSummary, run_job};
 pub use mt::{deepl_target, google_code};
 pub use prompt::{
     BUILTIN_PRESETS, BuiltinPreset, BuiltinSection, DEFAULT_DIGEST_PRESET, DEFAULT_PRESET,
-    MAX_KNOWN_TERMS, MAX_PAPER_TERMS, PaperTerm, PresetKind, PromptPart, PromptPreview,
-    TEMPLATE_VARS, TermState, builtin_preset, check_template, join, language_name, learn_terms,
-    parse_reply, refine_message, refine_parts, refine_preview, refine_prompt, render_template,
-    split_terms, system_prompt, terms_in_use, translate_parts, translate_preview, user_message,
+    DEFAULT_QUICK_PRESET, MAX_KNOWN_TERMS, MAX_PAPER_TERMS, PaperTerm, PresetKind, PromptPart,
+    PromptPreview, TEMPLATE_VARS, TermState, builtin_preset, check_template, join, language_name,
+    learn_terms, parse_reply, refine_message, refine_parts, refine_preview, refine_prompt,
+    render_template, split_terms, system_prompt, terms_in_use, translate_parts, translate_preview,
+    user_message,
+};
+pub use quick::{
+    MAX_CONTEXT_CHARS, MAX_QUICK_CHARS, QuickInput, clean_reply, is_word, quick_message,
+    quick_parts, quick_preview,
 };
 
 /// 服務回報的用量（詞元數）。服務沒有回報的是 0。
@@ -144,6 +150,11 @@ pub struct Segment {
     pub before: Option<String>,
 }
 
+/// 快速翻譯的連線逾時（全文翻譯是 15 秒）。
+pub const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 快速翻譯整個請求的逾時（全文翻譯是 180 秒）：選取最多 2,000 字，等不到就改用離線的。
+pub const QUICK_TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
+
 enum Backend {
     Llm(llm::Llm),
     Mt(mt::Mt),
@@ -167,13 +178,31 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(cfg: &EngineConfig) -> Result<Engine> {
+        Engine::build(cfg, http::build_client(), 4)
+    }
+
+    /// 快速翻譯用的引擎：連線逾時 5 秒、整個請求 20 秒、不重試，連不上就快點讓畫面改用離線的。
+    /// 全文翻譯照舊用 `Engine::new`（連線 15 秒、整個請求 180 秒、最多四次）。
+    pub fn new_quick(cfg: &EngineConfig) -> Result<Engine> {
+        Engine::new_quick_with(cfg, QUICK_CONNECT_TIMEOUT, QUICK_TOTAL_TIMEOUT)
+    }
+
+    /// `new_quick`，逾時自己訂（測試用）。
+    pub fn new_quick_with(
+        cfg: &EngineConfig,
+        connect: Duration,
+        total: Duration,
+    ) -> Result<Engine> {
+        Engine::build(cfg, http::build_client_with(connect, total), 1)
+    }
+
+    fn build(cfg: &EngineConfig, http: reqwest::Client, max_attempts: u32) -> Result<Engine> {
         if cfg.provider.is_on_device() {
             return Err(TranslateError::new(
                 ErrorKind::Config,
                 "on-device engines are built with Engine::on_device",
             ));
         }
-        let http = http::build_client();
         let backend = if cfg.provider.is_chat_model() {
             if cfg.api_key.is_empty() && cfg.provider.info().key == Need::Required {
                 return Err(TranslateError::new(ErrorKind::Config, "no API key"));
@@ -186,7 +215,7 @@ impl Engine {
             provider: cfg.provider,
             backend,
             retry_base: Duration::from_secs(2),
-            max_attempts: 4,
+            max_attempts,
             min_interval: Duration::ZERO,
             last_request: Mutex::new(None),
             terms: Mutex::new(Vec::new()),
@@ -403,6 +432,53 @@ impl Engine {
             })
             .await?;
         Ok(out.pop().unwrap_or_default())
+    }
+
+    /// 選取文字的快速翻譯。對話模型照快速翻譯的提示詞送出選取與前後各一句（`quick.rs`），
+    /// 回覆整理過才交回；機器翻譯與離線引擎只收到選取的文字。速率、重試、取消與錯誤的分類和翻譯相同。
+    /// `params.instructions` 是快速翻譯的預設組（空白用內建的）。
+    pub async fn quick(
+        &self,
+        params: &Params,
+        input: &QuickInput,
+        cancel: &Cancel,
+    ) -> Result<String> {
+        if self.provider.info().target(&params.target_lang).is_none() {
+            return Err(TranslateError::new(
+                ErrorKind::UnsupportedLanguage,
+                "target language",
+            ));
+        }
+        let input = input.normalized()?;
+        match &self.backend {
+            Backend::Llm(l) => {
+                let known = terms_in_use(&self.paper_terms());
+                let (system, user) = quick::quick_request(params, &input, &known);
+                let mut out = self
+                    .retrying(cancel, || {
+                        let (s, u) = (system.clone(), user.clone());
+                        async move { l.complete(s, u).await.map(|t| vec![t]) }
+                    })
+                    .await?;
+                clean_reply(&out.pop().unwrap_or_default())
+            }
+            _ => {
+                // 沒有提示詞的引擎：只送選取的文字，不送前後文
+                let seg = Segment {
+                    id: "1".to_string(),
+                    text: input.text,
+                    before: None,
+                };
+                let mut out = self
+                    .retrying(cancel, || self.once(params, std::slice::from_ref(&seg)))
+                    .await?;
+                let t = out.pop().unwrap_or_default();
+                if t.trim().is_empty() {
+                    return Err(TranslateError::new(ErrorKind::BadResponse, "empty reply"));
+                }
+                Ok(t.trim().to_string())
+            }
+        }
     }
 
     /// 這個引擎能不能做第二輪潤飾（只有對話模型）。

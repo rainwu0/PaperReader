@@ -2,7 +2,10 @@
 // 不連任何真的服務。用法：node scripts/fake-llm-server.mjs [埠，預設 8787] [每次回應的延遲毫秒，預設 1200]
 // 模擬器裡用 http://10.0.2.2:<埠>/v1/ 連到電腦上的這個服務。
 // 第三個參數給 `zh`：譯文改成一段長度約為原文四成五的中文句子（驗譯本 PDF 的排字用），不再回原文。
+// 快速翻譯的請求（`<selection>…</selection>`）回「【快譯】」加選取（選一個詞時回兩行）。
+// 環境變數 `FAKE_LLM_LOG` 給一個檔名：每個請求收到的訊息記一行（驗收時看實際送了什麼）。
 
+import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const port = Number(process.argv[2] ?? 8787);
@@ -80,9 +83,24 @@ createServer((req, res) => {
         return "";
       }
     })();
+    if (process.env.FAKE_LLM_LOG) {
+      // 驗收時記下每一次實際收到的內容（快速翻譯送了什麼）：一行一個請求
+      try {
+        appendFileSync(process.env.FAKE_LLM_LOG, `${JSON.stringify({ n: requests, url: req.url, messages: JSON.parse(body).messages })}\n`);
+      } catch {
+        // 讀不懂的請求不記
+      }
+    }
     let out = "";
     const digest = fakeDigest(text);
-    if (digest !== null) {
+    // 系統提示詞裡也寫著 `<selection>…</selection>`：取最後一個（使用者訊息裡的）
+    const selection = [...text.matchAll(/<selection>([\s\S]*?)<\/selection>/g)].at(-1);
+    if (selection) {
+      // 快速翻譯：選一個詞回兩行（詞義、在這句裡的意思），選一句以上回一行譯文
+      const sel = selection[1];
+      out = text.includes("exactly two lines") ? `【詞義】${sel}\n【此處】${sel}` : `【快譯】${zh ? fakeZh("q", sel) : sel}`;
+      console.log(`#${requests} ${req.method} ${req.url} 快速翻譯 ${sel.length} 字`);
+    } else if (digest !== null) {
       out = digest;
       console.log(`#${requests} ${req.method} ${req.url} 重點筆記`);
     } else {

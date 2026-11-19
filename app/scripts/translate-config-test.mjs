@@ -7,6 +7,7 @@ import {
   defaultService,
   isInsecureRemote,
   menuServices,
+  mergeConsents,
   missingSetting,
   resumeNoteKey,
   supportsTarget,
@@ -40,6 +41,14 @@ test("接著翻的說法照引擎會不會送出裝置", () => {
   assert.equal(resumeNoteKey({ leavesDevice: true }), "generate.confirm.resumeNote");
   // 還不知道引擎時照會送出的說法（比較保守）
   assert.equal(resumeNoteKey(null), "generate.confirm.resumeNote");
+});
+
+// 舊的本機紀錄搬進設定檔時和設定檔裡已有的合併，不重複、不丟舊的
+test("同意清單合併", () => {
+  assert.deepEqual(mergeConsents([], ["a@x", "b@y"]), ["a@x", "b@y"]);
+  assert.deepEqual(mergeConsents(["a@x"], ["a@x", "c@z"]), ["a@x", "c@z"]);
+  assert.deepEqual(mergeConsents(["a@x"], []), ["a@x"]);
+  assert.deepEqual(mergeConsents([], ["", "a@x"]), ["a@x"]);
 });
 
 test("http 只有本機、模擬器與私人網段不警告", () => {

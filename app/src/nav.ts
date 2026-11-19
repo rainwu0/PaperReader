@@ -29,6 +29,8 @@ export type SheetKind =
   | "segPop"
   /** 閱讀畫面：點一條劃線出的小選單（刪除、短評）。 */
   | "hlPop"
+  /** 閱讀畫面：選取文字的快速翻譯卡片。 */
+  | "quickPop"
   | "views"
   /** 閱讀畫面：重點筆記（蓋滿畫面）、刪一點的確認。 */
   | "digest"

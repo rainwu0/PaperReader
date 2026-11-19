@@ -11,8 +11,8 @@
 use crate::error::{ApiError, ApiResult, ErrorKind};
 use paperreader_core::digest::{DigestSection, validate_sections};
 use paperreader_translate::{
-    BuiltinPreset, Cancel, DEFAULT_DIGEST_PRESET, PresetKind, Provider, TokenUsage, builtin_preset,
-    check_template,
+    BuiltinPreset, Cancel, DEFAULT_DIGEST_PRESET, DEFAULT_QUICK_PRESET, PresetKind, Provider,
+    TokenUsage, builtin_preset, check_template,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -177,6 +177,14 @@ pub struct TranslateSettings {
     /// 上次用來產生重點筆記的服務（代號）：重點筆記面板照它選好。和翻譯的分開記：
     /// 重點筆記只能用對話模型類的服務。不在服務清單裡的讀檔時丟掉。
     pub last_digest_service: Option<String>,
+    /// 快速翻譯用的服務：`None` 是「跟全文翻譯相同」（翻譯面板會先選的那一個，由畫面決定）。
+    /// 卡片角落的小下拉與設定頁改的都是這一個。不在服務清單裡的讀檔時丟掉；服務刪掉時改回「跟全文翻譯相同」。
+    pub quick_service: Option<String>,
+    /// 快速翻譯選用的提示詞預設組（用途 `quick`）。
+    pub quick_prompt: String,
+    /// 快速翻譯「送出前詢問」已經同意的服務與主機（`服務代號@主機`）。
+    /// 重新詢問是把它清空。
+    pub quick_consent: Vec<String>,
 }
 
 /// 讀設定檔用：新舊兩種格式的欄位都收。
@@ -196,6 +204,9 @@ struct RawSettings {
     wifi_only: Option<bool>,
     last_service: Option<String>,
     last_digest_service: Option<String>,
+    quick_service: Option<String>,
+    quick_prompt: Option<String>,
+    quick_consent: Vec<String>,
     // 舊版的欄位（`local_engine` 舊版也有：離線引擎現在是服務清單裡的一筆，讀到就略過）
     provider: Option<Provider>,
     profiles: BTreeMap<String, OldProfile>,
@@ -254,6 +265,7 @@ impl From<RawSettings> for TranslateSettings {
         let known = |l: &String| services.iter().any(|s| &s.id == l);
         let last_service = r.last_service.filter(known);
         let last_digest_service = r.last_digest_service.filter(known);
+        let quick_service = r.quick_service.filter(known);
         TranslateSettings {
             services,
             primary,
@@ -277,6 +289,12 @@ impl From<RawSettings> for TranslateSettings {
             wifi_only: r.wifi_only.unwrap_or(true),
             last_service,
             last_digest_service,
+            quick_service,
+            quick_prompt: r
+                .quick_prompt
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| DEFAULT_QUICK_PRESET.to_string()),
+            quick_consent: r.quick_consent,
         }
     }
 }
@@ -367,8 +385,18 @@ impl TranslateSettings {
             .expect("the standard digest preset is built in")
     }
 
+    /// 選用的快速翻譯預設組；找不到用內建的「快速翻譯」。
+    pub fn quick_preset(&self) -> PromptPreset {
+        self.preset(PresetKind::Quick, &self.quick_prompt)
+            .or_else(|| self.preset(PresetKind::Quick, DEFAULT_QUICK_PRESET))
+            .expect("the quick preset is built in")
+    }
+
     /// 選用的預設組不在了（刪掉了、改了用途）：改回各自的內建預設。
     pub fn fix_selection(&mut self) {
+        if self.preset(PresetKind::Quick, &self.quick_prompt).is_none() {
+            self.quick_prompt = DEFAULT_QUICK_PRESET.to_string();
+        }
         if self.preset(PresetKind::Translation, &self.prompt).is_none() {
             self.prompt = "academic".to_string();
         }
@@ -440,6 +468,16 @@ impl TranslateSettings {
         {
             return Err(bad("digest prompt"));
         }
+        if self.preset(PresetKind::Quick, &self.quick_prompt).is_none() {
+            return Err(bad("quick prompt"));
+        }
+        if self
+            .quick_service
+            .as_deref()
+            .is_some_and(|q| self.service(q).is_none())
+        {
+            return Err(bad("quick service"));
+        }
         Ok(())
     }
 }
@@ -463,8 +501,10 @@ pub fn validate_preset(p: &PromptPreset) -> ApiResult<()> {
         return Err(bad("prompt variable"));
     }
     match p.kind {
-        PresetKind::Translation if !p.sections.is_empty() => return Err(bad("prompt sections")),
-        PresetKind::Translation => {}
+        PresetKind::Translation | PresetKind::Quick if !p.sections.is_empty() => {
+            return Err(bad("prompt sections"));
+        }
+        PresetKind::Translation | PresetKind::Quick => {}
         PresetKind::Digest => {
             // 代號、名稱、數量照核心同一份規則；名稱空白的內建區段先補上內建的名稱
             if p.sections.is_empty() {
@@ -901,6 +941,45 @@ mod tests {
         let back: TranslateSettings = serde_json::from_value(v).unwrap();
         assert_eq!(back.last_digest_service, None);
         assert_eq!(back.last_service.as_deref(), Some("bergamot"));
+    }
+
+    /// 快速翻譯用的服務：預設是「跟全文翻譯相同」（`None`）；存得回來、刪掉的服務改回預設；
+    /// 指到不存在的服務不收。預設組預設是內建的「快速翻譯」，刪掉選用的那一組改回它。
+    #[test]
+    fn the_quick_translation_service_defaults_to_the_full_translation_one() {
+        let mut s: TranslateSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.quick_service, None);
+        assert_eq!(s.quick_prompt, "quick");
+        assert_eq!(s.quick_preset().kind, PresetKind::Quick);
+        s.quick_service = Some("deepl".into());
+        assert!(s.validate().is_ok());
+        let back: TranslateSettings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.quick_service.as_deref(), Some("deepl"));
+        let mut v = serde_json::to_value(&s).unwrap();
+        v["quick_service"] = "gone".into();
+        let back: TranslateSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(back.quick_service, None);
+        s.quick_service = Some("gone".into());
+        assert!(s.validate().is_err());
+        s.quick_service = None;
+        // 選用的是一組翻譯的預設組：用途不對，改回內建的
+        s.quick_prompt = "academic".into();
+        assert!(s.validate().is_err());
+        s.fix_selection();
+        assert_eq!(s.quick_prompt, "quick");
+        assert!(s.validate().is_ok());
+    }
+
+    /// 快速翻譯的同意：存在設定檔、讀得回來；沒有這一欄的舊設定檔是空清單（會再問）。
+    #[test]
+    fn quick_consent_is_kept_in_the_settings_file() {
+        let mut s: TranslateSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.quick_consent.is_empty());
+        s.quick_consent = vec!["anthropic@api.anthropic.com".into()];
+        let back: TranslateSettings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.quick_consent, vec!["anthropic@api.anthropic.com"]);
     }
 
     #[test]

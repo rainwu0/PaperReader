@@ -10,6 +10,15 @@ pub fn build_client() -> reqwest::Client {
     builder().build().expect("static client configuration")
 }
 
+/// 逾時照指定的用戶端（快速翻譯用：連線與整個請求都比全文翻譯短得多）。
+pub fn build_client_with(connect: Duration, total: Duration) -> reqwest::Client {
+    builder()
+        .connect_timeout(connect)
+        .timeout(total)
+        .build()
+        .expect("static client configuration")
+}
+
 /// 設好 TLS 與逾時的 builder，給要另外加限制的用途（應用內更新的轉址與 `Referer`）。
 pub fn builder() -> reqwest::ClientBuilder {
     let mut roots = rustls::RootCertStore::empty();

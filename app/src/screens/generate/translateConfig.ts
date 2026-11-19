@@ -66,6 +66,37 @@ export function menuServices(v: Pick<TranslateSettingsView, "services" | "primar
     .map((x) => x.s);
 }
 
+/** 「跟全文翻譯相同」實際是哪一個服務：翻譯面板一打開會選的那一個（上次用的，否則主要服務）。 */
+export function fullTranslationService(
+  v: Pick<TranslateSettingsView, "services" | "primary" | "fallbacks" | "lastService">,
+): string | null {
+  return defaultService(menuServices(v), v.lastService, null);
+}
+
+/**
+ * 快速翻譯實際用哪一個服務：設定指定了、而且還在翻譯選單上（啟用著）的那一個；
+ * 否則跟全文翻譯相同。
+ */
+export function quickServiceId(
+  v: Pick<TranslateSettingsView, "services" | "primary" | "fallbacks" | "lastService" | "quickService">,
+): string | null {
+  const menu = menuServices(v);
+  const q = v.quickService;
+  return q && menu.some((s) => s.id === q) ? q : fullTranslationService(v);
+}
+
+/**
+ * 快速翻譯的同意（送出前的詢問只問一次）存在設定檔的 `quickConsent`。
+ * 舊版（0.1.4 之前的測試版）記在網頁的本機儲存這個鍵下，讀到時搬進設定檔再刪掉。
+ */
+export const LEGACY_QUICK_CONSENT_KEY = "pr-quick-consent";
+export const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
+/** 兩份同意清單合在一起（去掉重複，原有的順序在前）。 */
+export function mergeConsents(current: readonly string[], legacy: readonly string[]): string[] {
+  return [...new Set([...current, ...legacy.filter((x) => x !== "")])];
+}
+
 /**
  * 服務網址是 `http://`（不加密）而且不是本機、模擬器或私人網段：金鑰與論文的文字會以明文送出。
  * 本機的 Ollama（`http://10.0.2.2:11434`、`http://192.168.x.x`）是正常用法，不警告。

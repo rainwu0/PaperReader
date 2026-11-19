@@ -948,7 +948,7 @@ export interface TranslateServiceView extends TranslateService {
 }
 
 /** 預設組的用途。 */
-export type PresetKind = "translation" | "digest";
+export type PresetKind = "translation" | "digest" | "quick";
 
 /** 重點筆記預設組的一個區段：代號（回覆 JSON 的鍵）、名稱（空白時用內建的名稱）、要寫什麼、最多幾點。 */
 export interface PromptSection {
@@ -1017,6 +1017,26 @@ export interface TranslateSettingsView {
   lastService: string | null;
   /** 上次用來產生重點筆記的服務（代號）；重點筆記面板照它選好。沒有是 `null`。 */
   lastDigestService: string | null;
+  /** 快速翻譯用的服務；`null` 是「跟全文翻譯相同」。 */
+  quickService: string | null;
+  /** 快速翻譯選用的預設組。 */
+  quickPrompt: string;
+  /** 快速翻譯已經同意送出的服務與主機（`服務代號@主機`）。 */
+  quickConsent: string[];
+}
+
+/** 選取文字的快速翻譯（`translate_quick`）的結果。 */
+export interface QuickResult {
+  text: string;
+  /** 實際翻的服務（代號）：沒有網路改用離線引擎時是那一筆。 */
+  service: string;
+  provider: TranslateProvider;
+  /** 原本的服務連不上，改用了離線的 Firefox 翻譯。 */
+  offline: boolean;
+  /** 查過的，這次沒有送出。 */
+  cached: boolean;
+  /** 選的是詞（詞義與在這句裡的意思）。 */
+  word: boolean;
 }
 
 /** 只改給了的欄位（`translate_settings_patch`）。 */
@@ -1035,6 +1055,12 @@ export interface TranslateSettingsPatch {
   lastService?: string;
   /** 這次用來產生重點筆記的服務（重點筆記面板開始時記下）。 */
   lastDigestService?: string;
+  /** 快速翻譯用的服務；空字串是改回「跟全文翻譯相同」。 */
+  quickService?: string;
+  /** 快速翻譯選用的預設組。 */
+  quickPrompt?: string;
+  /** 快速翻譯已經同意的服務與主機：整份取代，空清單是「重新詢問」。 */
+  quickConsent?: string[];
 }
 
 /** 術語庫的一條。 */

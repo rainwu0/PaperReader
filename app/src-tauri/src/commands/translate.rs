@@ -21,8 +21,8 @@ use paperreader_core::overlay::{
 use paperreader_translate::glossary::{self, Term};
 use paperreader_translate::{
     BUILTIN_PRESETS, Cancel, DigestInput, DigestSegment, Engine, EngineConfig, Need, PaperTerm,
-    Params, PresetKind, PromptPreview, Provider, Segment, TermState, TokenUsage, digest_preview,
-    refine_preview, run_job, terms_in_use, translate_preview,
+    Params, PresetKind, PromptPreview, Provider, QuickInput, Segment, TermState, TokenUsage,
+    digest_preview, quick_preview, refine_preview, run_job, terms_in_use, translate_preview,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -82,6 +82,12 @@ pub struct SettingsView {
     pub last_service: Option<String>,
     /// 上次用來產生重點筆記的服務。
     pub last_digest_service: Option<String>,
+    /// 快速翻譯用的服務；`null` 是「跟全文翻譯相同」。
+    pub quick_service: Option<String>,
+    /// 快速翻譯選用的預設組。
+    pub quick_prompt: String,
+    /// 快速翻譯已經同意送出的服務與主機（`服務代號@主機`）。
+    pub quick_consent: Vec<String>,
 }
 
 /// 文字實際會送到的主機。
@@ -160,6 +166,9 @@ async fn settings_view(app: &AppHandle, t: TranslateSettings) -> SettingsView {
         secrets_supported: supported,
         last_service: t.last_service,
         last_digest_service: t.last_digest_service,
+        quick_service: t.quick_service,
+        quick_prompt: t.quick_prompt,
+        quick_consent: t.quick_consent,
     }
 }
 
@@ -189,6 +198,12 @@ pub struct SettingsPatch {
     pub last_service: Option<String>,
     /// 這次用來產生重點筆記的服務。不在服務清單裡的不記。
     pub last_digest_service: Option<String>,
+    /// 快速翻譯用的服務：服務的代號，空字串是改回「跟全文翻譯相同」。不在服務清單裡的不收。
+    pub quick_service: Option<String>,
+    /// 快速翻譯選用的預設組。
+    pub quick_prompt: Option<String>,
+    /// 快速翻譯已經同意的服務與主機：整份取代（空清單是「重新詢問」）。
+    pub quick_consent: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -241,6 +256,19 @@ pub async fn translate_settings_patch(
                     && t.service(&v).is_some()
                 {
                     t.last_digest_service = Some(v);
+                }
+                if let Some(v) = patch.quick_service {
+                    // 空字串：跟全文翻譯相同；指到不存在的服務由 `validate` 擋下
+                    t.quick_service = Some(v).filter(|v| !v.is_empty());
+                }
+                if let Some(v) = patch.quick_prompt {
+                    t.quick_prompt = v;
+                }
+                if let Some(mut v) = patch.quick_consent {
+                    v.retain(|k| !k.is_empty());
+                    v.sort();
+                    v.dedup();
+                    t.quick_consent = v;
                 }
                 Ok(())
             })
@@ -336,7 +364,9 @@ pub async fn prompt_preview(
         (None, Some(p), PresetKind::Translation) => terms_in_use(&to_paper_terms(
             &inherited_terms(&latest_overlay_entries(&state, p, &target_lang).await),
         )),
-        (None, Some(p), PresetKind::Digest) => latest_overlay_terms(&state, p, &target_lang).await,
+        (None, Some(p), PresetKind::Digest | PresetKind::Quick) => {
+            latest_overlay_terms(&state, p, &target_lang).await
+        }
         (None, None, _) => Vec::new(),
     };
     let sample = Segment {
@@ -377,8 +407,25 @@ pub async fn prompt_preview(
             glossary: user_glossary(&state),
             paper_terms: terms,
         })],
+        // 快速翻譯：選一句的範例（選一個詞時「回覆的格式」換成詞義與在這句裡的意思）
+        PresetKind::Quick => {
+            let params = Params {
+                instructions: preset.text,
+                refine: false,
+                ..params_for(&state, &t, source_lang, target_lang, title)
+            };
+            let input = QuickInput {
+                text: TEST_SENTENCE.to_string(),
+                before: Some(SAMPLE_BEFORE.to_string()),
+                after: Some(SAMPLE_AFTER.to_string()),
+            };
+            vec![quick_preview(&params, &input, &terms)]
+        }
     })
 }
+
+/// 「看完整提示詞」快速翻譯的範例後文（實際送出時是選取後面的一句）。
+const SAMPLE_AFTER: &str = "The next sentence is sent as context only.";
 
 /// 「看完整提示詞」第二輪潤飾那一次的範例草稿（實際送出時是第一次請求的譯文）。
 const SAMPLE_DRAFT: &str = "（第一次請求的譯文）";
@@ -534,8 +581,14 @@ pub(crate) struct UsageMeter {
 
 impl UsageMeter {
     pub(crate) fn new(paper: &str, kind: &'static str, service: &str) -> UsageMeter {
+        Self::for_job(&new_id(kind, |_| false), paper, kind, service)
+    }
+
+    /// 記到指定的那一筆（同一個 `job` 與服務加在一起）：快速翻譯每一篇、每個服務只占一筆，
+    /// 不會因為查很多次而把翻譯與重點筆記的紀錄擠出上限。
+    pub(crate) fn for_job(job: &str, paper: &str, kind: &'static str, service: &str) -> UsageMeter {
         UsageMeter {
-            job: new_id(kind, |_| false),
+            job: job.to_string(),
             paper: paper.to_string(),
             kind,
             service: service.to_string(),
@@ -641,6 +694,10 @@ pub async fn translate_service_delete(
                 }
                 t.services.retain(|x| x.id != gone);
                 t.fallbacks.retain(|f| f != &gone);
+                // 快速翻譯用的是它：改回「跟全文翻譯相同」
+                if t.quick_service.as_deref() == Some(gone.as_str()) {
+                    t.quick_service = None;
+                }
                 if t.primary == gone {
                     t.primary = t
                         .services
@@ -754,6 +811,16 @@ pub(crate) async fn engine_for(
     s: &Service,
     target_lang: &str,
 ) -> ApiResult<Engine> {
+    engine_for_with(app, s, target_lang, false).await
+}
+
+/// `quick` 是快速翻譯用的：連線逾時短、不重試；只影響送出裝置的服務。
+pub(crate) async fn engine_for_with(
+    app: &AppHandle,
+    s: &Service,
+    target_lang: &str,
+    quick: bool,
+) -> ApiResult<Engine> {
     if s.provider.info().target(target_lang).is_none() {
         return Err(ApiError::new(
             ErrorKind::TranslateLanguage,
@@ -764,7 +831,12 @@ pub(crate) async fn engine_for(
         return device_engine(app, s.provider, target_lang).await;
     }
     let cfg = engine_config(app, s).await?;
-    Engine::new(&cfg)
+    let built = if quick {
+        Engine::new_quick(&cfg)
+    } else {
+        Engine::new(&cfg)
+    };
+    built
         .map(|e| e.with_rate(s.rpm))
         .map_err(|e| ApiError::new(api_kind(e.kind), "engine").log("translate_engine"))
 }
@@ -1377,6 +1449,268 @@ pub async fn overlay_apply(
                 .map(|_| ())
         })
         .await
+}
+
+// ---------- 選取文字的快速翻譯 ----------
+
+/// 快速翻譯的快取檔（和設定檔放在一起：應用專屬空間，不進文獻庫、不進備份、不同步）。
+pub const QUICK_CACHE_FILE: &str = "quick-cache.json";
+/// 快取最多幾筆（多的丟掉最舊的）。
+const QUICK_CACHE_MAX: usize = 300;
+
+#[derive(Default, Serialize, Deserialize)]
+struct QuickCacheFile {
+    #[serde(default)]
+    entries: Vec<QuickCacheEntry>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct QuickCacheEntry {
+    /// 這一篇、這個服務（引擎與模型）、目標語言、提示詞、選取與前後文的雜湊（不存原文）。
+    key: String,
+    text: String,
+    service: String,
+}
+
+/// 查過的快速翻譯：記憶體一份（第一次用時從快取檔讀進來），寫入時記憶體與檔案一起改。
+#[derive(Default)]
+pub struct QuickCache(std::sync::Mutex<Option<Vec<QuickCacheEntry>>>);
+
+impl QuickCache {
+    fn get(&self, state: &AppState, key: &str) -> Option<QuickCacheEntry> {
+        let mut g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let entries =
+            g.get_or_insert_with(|| state.read_side::<QuickCacheFile>(QUICK_CACHE_FILE).entries);
+        entries.iter().find(|e| e.key == key).cloned()
+    }
+
+    /// 記下一筆。寫不進檔案只記一行：這次查到的照樣顯示，記憶體裡也留著。
+    fn put(&self, state: &AppState, entry: QuickCacheEntry) {
+        let add = |list: &mut Vec<QuickCacheEntry>| {
+            list.retain(|e| e.key != entry.key);
+            list.push(entry.clone());
+            if list.len() > QUICK_CACHE_MAX {
+                let extra = list.len() - QUICK_CACHE_MAX;
+                list.drain(..extra);
+            }
+        };
+        if let Err(e) = state.update_side(QUICK_CACHE_FILE, |f: &mut QuickCacheFile| {
+            add(&mut f.entries)
+        }) {
+            let _ = e.log("quick_cache");
+        }
+        let mut g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        add(g.get_or_insert_with(Vec::new));
+    }
+}
+
+/// 快取的鍵：同一篇、同一段文字、同一個服務（含模型）、同一個目標語言與提示詞才算查過。
+/// 機器翻譯與離線引擎不收提示詞與前後文，鍵也不算它們。
+fn quick_key(
+    paper_id: &str,
+    svc: &Service,
+    target_lang: &str,
+    preset: &str,
+    input: &QuickInput,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let chat = svc.provider.is_chat_model();
+    let (model, endpoint) = svc.model_endpoint();
+    let parts = serde_json::json!([
+        paper_id,
+        svc.id,
+        svc.provider.key(),
+        if chat { model } else { String::new() },
+        endpoint.unwrap_or_default(),
+        target_lang,
+        if chat { preset } else { "" },
+        input.text,
+        if chat { input.before.clone() } else { None },
+        if chat { input.after.clone() } else { None },
+    ]);
+    let digest = Sha256::digest(parts.to_string().as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 一次快速翻譯的結果。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickResult {
+    pub text: String,
+    /// 實際翻的服務（代號）。沒有網路改用離線引擎時是離線引擎那一筆。
+    pub service: String,
+    pub provider: Provider,
+    /// 原本的服務連不上、改用了離線的 Firefox 翻譯。
+    pub offline: bool,
+    /// 查過的，這次沒有送出。
+    pub cached: bool,
+    /// 選的是詞（給詞義與在這句裡的意思）。
+    pub word: bool,
+}
+
+/// 用 `svc` 翻一次（先看快取）。交回譯文與是不是查過的。
+#[allow(clippy::too_many_arguments)]
+async fn quick_once(
+    app: &AppHandle,
+    state: &AppState,
+    cache: &QuickCache,
+    paper_id: &str,
+    svc: &Service,
+    params: &Params,
+    input: &QuickInput,
+    paper_terms: &[OverlayTerm],
+) -> Result<(String, bool), paperreader_translate::TranslateError> {
+    let key = quick_key(
+        paper_id,
+        svc,
+        &params.target_lang,
+        &params.instructions,
+        input,
+    );
+    if let Some(hit) = cache.get(state, &key) {
+        return Ok((hit.text, true));
+    }
+    let engine = engine_for_with(app, svc, &params.target_lang, true)
+        .await
+        .map_err(|e| {
+            paperreader_translate::TranslateError::new(translate_kind(e.kind), "engine")
+        })?;
+    // 送出裝置的服務：連線 5 秒、不重試（引擎已設）；裝置上的離線引擎照舊等 0.4 秒、最多兩次
+    let engine = if svc.provider.is_on_device() {
+        engine.with_retry(Duration::from_millis(400), 2)
+    } else {
+        engine
+    }
+    .with_paper_terms(to_paper_terms(paper_terms));
+    let mut meter = UsageMeter::for_job(&format!("quick-{paper_id}"), paper_id, "quick", &svc.id);
+    let out = engine.quick(params, input, &Cancel::new()).await;
+    meter.flush(state, &engine);
+    let text = out?;
+    cache.put(
+        state,
+        QuickCacheEntry {
+            key,
+            text: text.clone(),
+            service: svc.id.clone(),
+        },
+    );
+    Ok((text, false))
+}
+
+/// 外殼的錯誤種類換回翻譯套件的（`quick_once` 統一用翻譯套件的錯誤，才分得出「連不上」）。
+fn translate_kind(k: ErrorKind) -> paperreader_translate::ErrorKind {
+    use paperreader_translate::ErrorKind as T;
+    match k {
+        ErrorKind::TranslateAuth => T::Auth,
+        ErrorKind::TranslateRateLimited => T::RateLimited,
+        ErrorKind::TranslateNetwork => T::Network,
+        ErrorKind::TranslateServer => T::Server,
+        ErrorKind::TranslateBadResponse => T::BadResponse,
+        ErrorKind::TranslateLanguage => T::UnsupportedLanguage,
+        ErrorKind::TranslateNoModel => T::ModelMissing,
+        _ => T::Config,
+    }
+}
+
+/// 選取文字的快速翻譯：用 `service`（畫面照「快速翻譯用的服務」決定，預設和全文翻譯相同）翻 `text`。
+/// 對話模型另收前後各一句（只用來決定詞義）；機器翻譯與離線引擎只收選取的文字。
+/// 同一篇、同一段、同一個服務查過的直接交回，不再送出。送出前的詢問由畫面做。
+/// 會送出裝置的服務連不上、而這台裝置有離線的 Firefox 翻譯模型時，改用它（卡片上註明）；不會自動改用另一個雲端服務。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn translate_quick(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cache: State<'_, QuickCache>,
+    paper_id: String,
+    text: String,
+    before: Option<String>,
+    after: Option<String>,
+    service: String,
+) -> ApiResult<QuickResult> {
+    let input = QuickInput {
+        text,
+        before,
+        after,
+    }
+    .normalized()
+    .map_err(|_| ApiError::new(ErrorKind::InvalidInput, "selection length"))?;
+    let t = state.translate_settings();
+    let svc = find_service(&t, &service)?;
+    let pid = paper_id.clone();
+    let title = state
+        .lib("translate_quick", move |l| {
+            let (p, _) = l.get_paper(&pid)?;
+            Ok(p.bib.title.filter(|t| !t.trim().is_empty()))
+        })
+        .await?;
+    let params = Params {
+        instructions: t.quick_preset().text,
+        refine: false,
+        ..params_for(
+            &state,
+            &t,
+            Some(t.source_lang.clone()).filter(|l| !l.is_empty()),
+            t.target_lang.clone(),
+            title,
+        )
+    };
+    let word = paperreader_translate::is_word(&input.text);
+    // 這篇最新那份同語言譯本照用的術語：快速翻譯和全文譯本的用詞一致
+    let terms = latest_overlay_entries(&state, &paper_id, &t.target_lang).await;
+    let first = quick_once(
+        &app, &state, &cache, &paper_id, &svc, &params, &input, &terms,
+    )
+    .await;
+    let err = match first {
+        Ok((text, cached)) => {
+            return Ok(QuickResult {
+                text,
+                service: svc.id.clone(),
+                provider: svc.provider,
+                offline: false,
+                cached,
+                word,
+            });
+        }
+        Err(e) => e,
+    };
+    // 連不上：有下載離線模型就改用它（沒有網路時自動用）
+    if err.kind == paperreader_translate::ErrorKind::Network
+        && svc.provider.info().leaves_device
+        && let Some(local) = offline_service(&app, &t)
+        && let Ok((text, cached)) = quick_once(
+            &app, &state, &cache, &paper_id, &local, &params, &input, &terms,
+        )
+        .await
+    {
+        return Ok(QuickResult {
+            text,
+            service: local.id.clone(),
+            provider: local.provider,
+            offline: true,
+            cached,
+            word,
+        });
+    }
+    Err(ApiError::new(api_kind(err.kind), "quick").log("translate_quick"))
+}
+
+/// 這台裝置上可以用的離線翻譯（Firefox 翻譯）：支援目前的目標語言、模型已經下載。服務清單裡有那一筆就用它
+/// （名稱照使用者取的），刪掉了也照樣可以用（用引擎的預設）。
+fn offline_service(app: &AppHandle, t: &TranslateSettings) -> Option<Service> {
+    let pair = ondevice::bergamot_pair(Some("en"), &t.target_lang)?;
+    let data = app.path().app_data_dir().ok()?;
+    if !ondevice::bergamot_ready(&data, pair) {
+        return None;
+    }
+    Some(
+        t.services
+            .iter()
+            .find(|s| s.provider == Provider::Bergamot)
+            .cloned()
+            .unwrap_or_else(|| Service::default_for(Provider::Bergamot.key(), Provider::Bergamot)),
+    )
 }
 
 // ---------- 術語庫 ----------

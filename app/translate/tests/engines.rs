@@ -153,6 +153,64 @@ async fn deepl_uses_official_api_shape() {
 }
 
 #[tokio::test]
+async fn quick_translation_sends_the_selection_with_one_sentence_each_side() {
+    let srv = serve(|_, _| openai_reply("```\n卷積\n此處指影像上的卷積運算\n```")).await;
+    let e = fast(
+        Engine::new(&cfg(
+            Provider::OpenaiCompatible,
+            &format!("{}/v1", srv.base),
+            "m",
+            "",
+        ))
+        .unwrap(),
+    );
+    let input = QuickInput {
+        text: "convolution".into(),
+        before: Some("We stack layers.".into()),
+        after: Some("It is fast.".into()),
+    };
+    let out = e.quick(&params(), &input, &Cancel::new()).await.unwrap();
+    assert_eq!(out, "卷積\n此處指影像上的卷積運算");
+    assert_eq!(srv.count(), 1);
+    let body = srv.last().body;
+    assert!(body.contains("<before>We stack layers.</before>"));
+    assert!(body.contains("<selection>convolution</selection>"));
+    assert!(body.contains("<after>It is fast.</after>"));
+    assert!(body.contains("exactly two lines"));
+    // 用量照記
+    assert_eq!(e.usage().input, 1);
+}
+
+#[tokio::test]
+async fn quick_translation_with_machine_translation_sends_only_the_selection() {
+    let srv = serve(|req, _| {
+        let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+        let t = v["text"][0].as_str().unwrap().to_string();
+        Resp::json(
+            serde_json::json!({ "translations": [{"text": format!("譯：{t}")}] }).to_string(),
+        )
+    })
+    .await;
+    let e = Engine::new(&cfg(Provider::Deepl, &srv.base, "", "k")).unwrap();
+    let input = QuickInput {
+        text: "We propose a method.".into(),
+        before: Some("SECRET BEFORE".into()),
+        after: Some("SECRET AFTER".into()),
+    };
+    let out = e.quick(&params(), &input, &Cancel::new()).await.unwrap();
+    assert_eq!(out, "譯：We propose a method.");
+    let body = srv.last().body;
+    assert!(!body.contains("SECRET"));
+    // 太長的選取不送出
+    let long = QuickInput {
+        text: "a".repeat(MAX_QUICK_CHARS + 1),
+        ..QuickInput::default()
+    };
+    assert!(e.quick(&params(), &long, &Cancel::new()).await.is_err());
+    assert_eq!(srv.count(), 1);
+}
+
+#[tokio::test]
 async fn google_v2_puts_the_key_in_a_header_not_the_url() {
     let srv = serve(|req, _| {
         let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
@@ -985,4 +1043,76 @@ async fn terms_are_learned_from_the_text_that_is_kept_not_the_draft() {
         "{:?}",
         e.paper_terms()
     );
+}
+
+// 快速翻譯的逾時短、不重試；全文翻譯（`Engine::new`）照舊。
+fn quick_input() -> QuickInput {
+    QuickInput {
+        text: "Hello".into(),
+        before: None,
+        after: None,
+    }
+}
+
+#[tokio::test]
+async fn quick_translation_does_not_retry_but_full_translation_does() {
+    let srv = serve(|_, _| Resp::status(503, "down")).await;
+    let c = cfg(Provider::Openai, &format!("{}/v1", srv.base), "m", "k");
+    // 快速翻譯：一次就放棄
+    let q = Engine::new_quick(&c).unwrap();
+    let err = q
+        .quick(&params(), &quick_input(), &Cancel::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Server);
+    assert_eq!(srv.count(), 1);
+    // 全文翻譯用的引擎（只把等待縮短，次數照預設的四次）會一直試到上限
+    let full = Engine::new(&c)
+        .unwrap()
+        .with_retry(Duration::from_millis(1), 4);
+    let err = full
+        .translate_batch(&params(), &[seg("1", "Hi")], &Cancel::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Server);
+    assert_eq!(srv.count(), 1 + 4);
+}
+
+#[tokio::test]
+async fn quick_translation_gives_up_on_a_silent_service_after_its_short_timeout() {
+    // 連得上、但收到後永遠不回
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = accepted.clone();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = l.accept().await {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(s);
+        }
+    });
+    let c = cfg(
+        Provider::Openai,
+        &format!("http://127.0.0.1:{port}/v1"),
+        "m",
+        "k",
+    );
+    let e =
+        Engine::new_quick_with(&c, Duration::from_millis(200), Duration::from_millis(400)).unwrap();
+    let started = std::time::Instant::now();
+    let err = e
+        .quick(&params(), &quick_input(), &Cancel::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Network);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    // 不重試：只連了一次
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn quick_timeouts_are_short() {
+    assert_eq!(QUICK_CONNECT_TIMEOUT, Duration::from_secs(5));
+    assert!(QUICK_TOTAL_TIMEOUT < Duration::from_secs(60));
 }

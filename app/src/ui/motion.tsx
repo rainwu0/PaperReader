@@ -14,7 +14,7 @@ import {
 } from "motion/react";
 import type { ReactNode } from "react";
 
-export { AnimatePresence, m, useIsPresent };
+export { AnimatePresence, m, useIsPresent, useReducedMotion };
 
 /** 時間（秒）：`--motion-short`、`--motion-quick`、`--motion-medium`、`--motion-long`。 */
 export const DUR = { short: 0.1, quick: 0.15, medium: 0.2, long: 0.3 } as const;

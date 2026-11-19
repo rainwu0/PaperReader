@@ -28,6 +28,10 @@ export function useHighlighting(o: {
   const { viewRef, notes, materialId, ready, nav, setToast } = o;
   const [highlightMode, setHighlightMode] = useState(false);
   const [selection, setSelection] = useState<SelectionCapture | null>(null);
+  // 選取還在變（拖開頭或結尾的把手）：選字的按鈕列先藏起來，停下來之後再出現在新的位置；
+  // 避免手指放開在按鈕上、把選取延伸到頁尾
+  const [dragging, setDragging] = useState(false);
+  const shownRef = useRef(false);
   const [editId, setEditId] = useState<string | null>(null);
   /** 點一條劃線出的小選單：哪一條、對齊畫面上的哪裡。 */
   const [menu, setMenu] = useState<{ id: string; anchor: { left: number; top: number; right: number; bottom: number } } | null>(null);
@@ -116,8 +120,12 @@ export function useHighlighting(o: {
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [notes.view, ready, materialId, o.generated, pending]);
 
+  /**
+   * 劃一條線。`withComment` 劃好後打開短評面板；`comment` 給了就連同短評一起存（快速翻譯的「劃線並寫進短評」），
+   * 提示說已寫進短評、可以復原。
+   */
   const create = useCallback(
-    async (cap: SelectionCapture, withComment: boolean) => {
+    async (cap: SelectionCapture, withComment: boolean, comment = "") => {
       const view = viewRef.current;
       if (!view || !materialId) return;
       const r = await notes.addHighlight({
@@ -128,7 +136,7 @@ export function useHighlighting(o: {
         position: { start: cap.start, end: cap.end, basis: "textlayer-chars-v1" },
         quote: { exact: cap.exact, prefix: cap.prefix, suffix: cap.suffix },
         fingerprint: view.fingerprint,
-        comment: "",
+        comment,
       });
       window.getSelection()?.removeAllRanges();
       setSelection(null);
@@ -143,7 +151,7 @@ export function useHighlighting(o: {
         // 劃錯了（尤其劃線模式選字即劃）可以馬上復原：剛加的這條直接刪掉
         const id = r.added.highlight.id;
         setToast({
-          message: t("reader.highlight.saved"),
+          message: t(comment.trim() !== "" ? "quick.savedAsComment" : "reader.highlight.saved"),
           keep: true,
           action: {
             label: t("common.undo"),
@@ -182,6 +190,9 @@ export function useHighlighting(o: {
   });
 
   // 長按劃線開小選單時，瀏覽器同時開始選字：那一下的選取不算（不出「劃線」鈕，劃線模式也不再劃一條）
+  useEffect(() => {
+    shownRef.current = selection !== null;
+  });
   const suppressUntil = useRef(0);
   const suppressSelection = (ms: number) => {
     suppressUntil.current = Date.now() + ms;
@@ -200,8 +211,11 @@ export function useHighlighting(o: {
         if (sel && !sel.isCollapsed) sel.removeAllRanges();
         return;
       }
+      // 按鈕列正顯示著、選取又變了：多半是在拖把手，先藏起來
+      if (shownRef.current) setDragging(true);
       timer = window.setTimeout(
         () => {
+          setDragging(false);
           const cap = o.brushOn ? null : (viewRef.current?.captureSelection() ?? null);
           setSelection(cap);
           if (cap && modeRef.current.highlightMode && modeRef.current.canMark) void createRef.current(cap, false);
@@ -293,6 +307,8 @@ export function useHighlighting(o: {
   return {
     highlightMode,
     selection,
+    /** 選取還在變（拖把手中）：選字的按鈕列藏起來。 */
+    dragging,
     setSelection,
     create,
     paragraphComment,

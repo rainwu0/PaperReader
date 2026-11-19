@@ -29,6 +29,7 @@ import type {
   GlossaryTerm,
   GlossaryImport,
   CompareColumn,
+  QuickResult,
   TranslateTestResult,
   InterchangeFormat,
   LocalEngine,
@@ -318,6 +319,12 @@ export const api = {
   glossaryImport: () => call<GlossaryImport>("glossary_import"),
   glossaryTsv: () => call<string>("glossary_tsv"),
   /** 幾個服務各翻一次選的段落（不寫進譯本）。 */
+  /**
+   * 選取文字的快速翻譯：只送選取的文字與前後各一句；查過的不再送出；連不上而有離線模型時改用它。
+   * 送出前的詢問由呼叫的一方先做。
+   */
+  translateQuick: (paperId: string, text: string, before: string | null, after: string | null, service: string) =>
+    call<QuickResult>("translate_quick", { paperId, text, before, after, service }),
   translateCompare: (paperId: string, materialId: string, segmentIds: string[], services: string[]) =>
     call<CompareColumn[]>("translate_compare", { paperId, materialId, segmentIds, services }),
   /**

@@ -25,6 +25,13 @@ export function openPromptSettings(nav: Nav, kind: PresetKind, id: string | null
   nav.push({ name: "translatePrompts" });
 }
 
+/** 每種用途選用的是設定裡的哪一個欄位、新增時從哪一組複製。 */
+const KIND: Record<PresetKind, { field: "prompt" | "digestPrompt" | "quickPrompt"; base: string }> = {
+  translation: { field: "prompt", base: "academic" },
+  digest: { field: "digestPrompt", base: "standard" },
+  quick: { field: "quickPrompt", base: "quick" },
+};
+
 function newId(): string {
   return `custom_${Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, "")}`;
 }
@@ -46,7 +53,7 @@ export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
     return <Screen title={t("prompts.title")} onBack={() => void nav.back()} className="settings" />;
   }
   const list = v.prompts.filter((p) => p.kind === kind);
-  const selected = kind === "translation" ? v.prompt : v.digestPrompt;
+  const selected = v[KIND[kind].field];
 
   const act = async (f: () => Promise<unknown>, done: StringKey, then?: () => void) => {
     if (busy) return;
@@ -60,7 +67,7 @@ export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
     }
   };
 
-  const select = (id: string) => void st.patch(kind === "translation" ? { prompt: id } : { digestPrompt: id });
+  const select = (id: string) => void st.patch({ [KIND[kind].field]: id });
 
   /** 另存一份自訂的（複製、新增）並展開它。 */
   const copy = (p: PromptPreset) => {
@@ -84,13 +91,13 @@ export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
     const original: PromptPreset = { id: p.id, name: p.name, kind: p.kind, text: p.text, sections: p.sections };
     props.undo(p.builtin ? t("prompts.resetDone") : t("prompts.deletedOne", { name: presetName(p) }), async () => {
       await api.savePrompt(original);
-      if (wasSelected) await api.patchTranslateSettings(p.kind === "translation" ? { prompt: p.id } : { digestPrompt: p.id });
+      if (wasSelected) await api.patchTranslateSettings({ [KIND[p.kind].field]: p.id });
       await st.reload();
     });
   };
 
   const addNew = () => {
-    const base = list.find((p) => p.id === (kind === "translation" ? "academic" : "standard")) ?? list[0];
+    const base = list.find((p) => p.id === KIND[kind].base) ?? list[0];
     if (!base) return;
     copy({ id: "", name: t("prompts.newName"), kind, text: base.text, sections: base.sections });
   };
@@ -105,6 +112,7 @@ export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
             options={[
               ["translation", t("prompts.kind.translation")],
               ["digest", t("prompts.kind.digest")],
+              ["quick", t("prompts.kind.quick")],
             ]}
             value={kind}
             onChange={(k) => {
@@ -115,7 +123,7 @@ export function TranslatePrompts(props: { nav: Nav; undo: ShowUndo }) {
           />
         </div>
         <p className="set-hint set-about">
-          {t(kind === "translation" ? "prompts.about.translation" : "prompts.about.digest")}
+          {t(`prompts.about.${kind}`)}
           <InfoTip label={t("prompts.title")}>{t("prompts.rules")}</InfoTip>
         </p>
         {note ? (

@@ -25,6 +25,8 @@ pub enum PresetKind {
     #[default]
     Translation,
     Digest,
+    /// 選取文字的快速翻譯（`quick.rs`）。
+    Quick,
 }
 
 /// 內建重點筆記預設組的一個區段：代號、要寫什麼（給模型的說明）、最多幾點。名稱跟著輸出的語言，由外殼給。
@@ -49,6 +51,8 @@ pub struct BuiltinPreset {
 pub const DEFAULT_PRESET: &str = "general";
 /// 重點筆記的預設組沒有指定時用的。
 pub const DEFAULT_DIGEST_PRESET: &str = "standard";
+/// 快速翻譯的預設組沒有指定時用的。
+pub const DEFAULT_QUICK_PRESET: &str = "quick";
 
 pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
     BuiltinPreset {
@@ -112,6 +116,16 @@ comparisons of your own.",
                 max: 4,
             },
         ],
+    },
+    // 快速翻譯：詞給詞義與在這句裡的意思，句與段只給譯文。要怎麼回（兩行、不加說明）在 `quick.rs` 固定附加
+    BuiltinPreset {
+        id: "quick",
+        kind: PresetKind::Quick,
+        text: "You help a researcher read the academic paper titled \"{{title}}\". \
+Translate the selected text from {{from}} into {{to}}, using the established terms of the paper's field.\n\
+- For a single word or a short phrase: give its general meaning, then what it means in this sentence.\n\
+- For a sentence or a longer passage: give only a faithful, complete translation.",
+        sections: &[],
     },
 ];
 
@@ -249,7 +263,7 @@ pub(crate) fn language_rules(target_lang: &str) -> String {
 }
 
 /// 程式固定附加的規則：保留公式與引用（自動檢查與譯文疊加靠它）、語言的規則。
-fn fixed_rules(p: &Params) -> String {
+pub(crate) fn fixed_rules(p: &Params) -> String {
     let mut s = String::from(
         "\n\nRules that always apply:\n\
          - Keep mathematical formulas, symbols, LaTeX, equation numbers, variable names, code, URLs and DOIs exactly as written.\n\
@@ -999,6 +1013,9 @@ mod tests {
             builtin_preset("academic").unwrap().kind,
             PresetKind::Translation
         );
+        let q = builtin_preset(DEFAULT_QUICK_PRESET).unwrap();
+        assert_eq!(q.kind, PresetKind::Quick);
+        assert!(q.sections.is_empty());
         let s = builtin_preset(DEFAULT_DIGEST_PRESET).unwrap();
         assert_eq!(s.kind, PresetKind::Digest);
         let ids: Vec<&str> = s.sections.iter().map(|x| x.id).collect();

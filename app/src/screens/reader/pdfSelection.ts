@@ -10,6 +10,8 @@ export interface SelectionCapture {
   pageIndex: number;
   rects: Rect[];
   exact: string;
+  /** 選取的字數（空白收過、還沒截到 2000 字之前的；快速翻譯看它判斷是不是太長）。 */
+  length: number;
   prefix: string;
   suffix: string;
   start: number;
@@ -43,7 +45,8 @@ export function captureSelection(slotOf: (n: number) => SelectableSlot | undefin
   const r = range.cloneRange();
   if (!tl.contains(range.endContainer)) r.setEnd(tl, tl.childNodes.length);
   const raw = r.toString();
-  const exact = (selectedText(r, tl) ?? raw).replace(/\s+/g, " ").trim().slice(0, 2000);
+  const whole = (selectedText(r, tl) ?? raw).replace(/\s+/g, " ").trim();
+  const exact = whole.slice(0, 2000);
   if (exact === "") return null;
   const box = slot.box.getBoundingClientRect();
   const rects = Array.from(r.getClientRects()).filter(
@@ -79,6 +82,7 @@ export function captureSelection(slotOf: (n: number) => SelectableSlot | undefin
     pageIndex: slot.n - 1,
     rects: pdfRects,
     exact,
+    length: whole.length,
     prefix: full.slice(Math.max(0, start - 32), start),
     suffix: full.slice(end, end + 32),
     start,
@@ -112,6 +116,30 @@ export function firstVisibleLine(
   const cap = capture();
   sel?.removeAllRanges();
   return cap;
+}
+
+/**
+ * 一頁文字層的文字，換行處（文字層的 `<br>`）補一個空格，連同選取的起訖（`start`、`end` 是文字層全部文字接起來的位移，
+ * 同 `captureSelection`）換算到這份文字裡的位置。快速翻譯取前後各一句用。只走一次節點，不量版面。
+ */
+export function layerText(layer: HTMLElement, start: number, end: number): { text: string; start: number; end: number } {
+  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let text = "";
+  let raw = 0;
+  let s = -1;
+  let e = -1;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n instanceof Text) {
+      const len = n.data.length;
+      if (s < 0 && start <= raw + len) s = text.length + (start - raw);
+      if (e < 0 && end <= raw + len) e = text.length + (end - raw);
+      text += n.data;
+      raw += len;
+    } else if (n instanceof HTMLBRElement && !/\s$/.test(text)) {
+      text += " ";
+    }
+  }
+  return { text, start: s < 0 ? text.length : s, end: e < 0 ? text.length : e };
 }
 
 /**

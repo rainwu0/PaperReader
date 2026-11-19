@@ -39,6 +39,8 @@ $steps = @(
     @{ Name = '介面靜態檢查';   Cmd = 'npm run lint' },
     @{ Name = '介面邏輯測試';   Cmd = 'npm run test:ui' },
     @{ Name = '外掛的邊界';     Cmd = 'node scripts/ext-boundary.mjs' },
+    # tools/ 只在私人版本庫（不進公開快照），沒有就略過
+    @{ Name = '專案工具的測試'; Cmd = 'if (Test-Path ../tools/tests) { py -3 -m unittest discover -s ../tools/tests } else { Write-Host "略過：沒有 tools/" }' },
     @{ Name = '版號一致性';     Cmd = 'node scripts/version-check.mjs' },
     @{ Name = '介面相依的漏洞'; Cmd = 'node scripts/npm-audit.mjs' },
     @{ Name = '介面相依的授權'; Cmd = 'node scripts/npm-licenses.mjs' },

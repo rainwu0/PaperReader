@@ -12,6 +12,7 @@ import { helpStrings } from "./help";
 import { homeStrings } from "./home";
 import { importStrings } from "./import";
 import { ondeviceStrings } from "./ondevice";
+import { quickStrings } from "./quick";
 import { readerStrings } from "./reader";
 import { syncStrings } from "./sync";
 import { translateStrings } from "./translate";
@@ -403,6 +404,7 @@ export const zhTW = {
   ...syncStrings,
   ...importStrings,
   ...updateStrings,
+  ...quickStrings,
 } as const;
 
 export type StringKey = keyof typeof zhTW;
