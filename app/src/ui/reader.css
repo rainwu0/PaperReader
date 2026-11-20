@@ -941,7 +941,8 @@
   z-index: 1;
 }
 
-.notes-pane.portrait .np-handle {
+.notes-pane.portrait .np-handle,
+.bi-pane.portrait .np-handle {
   left: 0;
   right: 0;
   top: -18px;
@@ -949,7 +950,8 @@
   cursor: row-resize;
 }
 
-.notes-pane.landscape .np-handle {
+.notes-pane.landscape .np-handle,
+.bi-pane.landscape .np-handle {
   top: 0;
   bottom: 0;
   left: -18px;
@@ -963,14 +965,93 @@
   background: var(--border);
 }
 
-.notes-pane.portrait .np-handle span {
+.notes-pane.portrait .np-handle span,
+.bi-pane.portrait .np-handle span {
   width: 48px;
   height: 5px;
 }
 
-.notes-pane.landscape .np-handle span {
+.notes-pane.landscape .np-handle span,
+.bi-pane.landscape .np-handle span {
   width: 5px;
   height: 48px;
+}
+
+/* ---------- 中英對照：原文一格、譯本一格 ---------- */
+
+/* 直拿時上下分、橫拿時左右分；譯本那一格占兩格合起來的 --bi-split（閱讀畫面設，拖分隔線改）。
+   筆記窗格開著時兩格一起讓出它占的地方（--bi-bottom 是兩格的底邊離畫面底的距離）。
+   寫在筆記窗格的規則之後：同樣的選擇器強度，這裡的蓋過 .pane-open 的捲動區位置 */
+.reader.bilingual {
+  --bi-bottom: var(--inset-bottom);
+}
+
+.reader.bilingual.pane-open {
+  --bi-bottom: calc(var(--pane-lift, var(--inset-bottom)) + var(--pane-h, 0px));
+}
+
+.reader.bi-rows .reader-scroll {
+  right: var(--pane-w, 0px);
+  bottom: calc(var(--bi-bottom) + (100% - var(--inset-top) - var(--bi-bottom)) * var(--bi-split, 0.5));
+}
+
+.reader.bi-cols .reader-scroll {
+  bottom: var(--bi-bottom);
+  right: calc(var(--pane-w, 0px) + (100% - var(--pane-w, 0px)) * var(--bi-split, 0.5));
+  padding-right: 0;
+}
+
+/* 疊在原文那一格的頁面幾層（文字層、短評標記，最高 4）之上：分隔線伸進原文那一格的那一半才按得到；
+   頂列、工具箱、頁碼（5 以上）仍在它上面 */
+.bi-pane {
+  position: absolute;
+  z-index: 4;
+  background: var(--reader-bg);
+  border: 0 solid var(--border);
+}
+
+.bi-pane.portrait {
+  left: 0;
+  right: var(--pane-w, 0px);
+  bottom: var(--bi-bottom);
+  height: calc((100% - var(--inset-top) - var(--bi-bottom)) * var(--bi-split, 0.5));
+  border-top-width: 1.5px;
+}
+
+.bi-pane.landscape {
+  top: var(--inset-top);
+  bottom: var(--bi-bottom);
+  right: var(--pane-w, 0px);
+  width: calc((100% - var(--pane-w, 0px)) * var(--bi-split, 0.5));
+  border-left-width: 1.5px;
+}
+
+.bi-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  padding-left: var(--inset-left);
+  padding-right: var(--inset-right);
+}
+
+.bi-pane.landscape .bi-scroll {
+  padding-left: 0;
+}
+
+.bi-pane .np-handle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* 檢視切換裡現在不能選的那一項：名稱下面寫原因 */
+.view-note {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  font-weight: 400;
 }
 
 .np-head {

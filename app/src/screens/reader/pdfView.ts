@@ -23,10 +23,12 @@ import { toRawItems } from "../../translate/extract";
 import { RegionLayer, type RegionSource } from "./pdfRegions";
 import { segmentAt, shownText, type Seg } from "./segments";
 import { rangeBox } from "./textRange";
+import { clamp, scrollFor, switchAt, type FollowMark, type PageBox, type SwitchPosition } from "./viewSync";
 
 // 選取、筆刷、雙指縮放各在自己的檔；型別從這裡一起交出去，閱讀畫面不必知道分在哪裡
 export type { BrushStyle, InkStroke, NewStroke } from "./pdfInk";
 export type { SelectionCapture } from "./pdfSelection";
+export type { SwitchPosition } from "./viewSync";
 
 const PAD = 8; // 縮放 1 倍時的邊距與頁間距（CSS 像素）
 const MIN_ZOOM = 1;
@@ -62,17 +64,6 @@ interface OutlineNode {
   title?: string;
   dest?: string | unknown[] | null;
   items?: OutlineNode[];
-}
-
-/**
- * 原文與譯本之間切換時帶著的位置（兩份版面相同，所以這四個值就對得上）：
- * 頁序、畫面中線落在該頁高度的比例（0 到 1）、水平捲動占可捲範圍的比例（0 到 1）、縮放倍率。
- */
-export interface SwitchPosition {
-  page: number;
-  mid: number;
-  hx: number;
-  zoom: number;
 }
 
 /**
@@ -349,31 +340,14 @@ export class PdfView {
     return out;
   }
 
-  /** 切換用的位置：畫面中線在哪一頁的哪個高度、水平捲到哪、縮放多少。 */
+  /** 切換用的位置：畫面中線在哪一頁的哪個高度、水平捲到哪、縮放多少（換算在 `viewSync.ts`）。 */
   getSwitchPosition(): SwitchPosition {
     const sc = this.o.scroll;
     if (!sc.isConnected || this.slots.length === 0) {
       const last = this.lastSwitch;
       return last ? { ...last, zoom: this.zoom } : { page: 1, mid: 0, hx: 0, zoom: this.zoom };
     }
-    const midY = sc.scrollTop + sc.clientHeight / 2;
-    let lo = 0;
-    let hi = this.slots.length - 1;
-    while (lo < hi) {
-      const m = (lo + hi + 1) >> 1;
-      const slot = this.slots[m];
-      if (slot && slot.box.offsetTop <= midY) lo = m;
-      else hi = m - 1;
-    }
-    const slot = this.slots[lo];
-    const h = slot?.box.offsetHeight || 1;
-    const range = sc.scrollWidth - sc.clientWidth;
-    const pos: SwitchPosition = {
-      page: slot?.n ?? 1,
-      mid: clamp((midY - (slot?.box.offsetTop ?? 0)) / h, 0, 1),
-      hx: range > 1 ? clamp(sc.scrollLeft / range, 0, 1) : 0,
-      zoom: this.zoom,
-    };
+    const pos = switchAt(this.pageBoxes(), this.scrollBox(), this.zoom);
     this.lastSwitch = pos;
     return pos;
   }
@@ -385,17 +359,54 @@ export class PdfView {
       this.zoom = clamp(p.zoom, MIN_ZOOM, MAX_ZOOM);
       this.layout();
     }
-    const n = this.slots.length;
-    const clamped = p.page > n;
-    const slot = this.slots[clamp(p.page, 1, Math.max(1, n)) - 1];
-    if (!slot) return true;
-    const mid = clamped ? 0.5 : p.mid;
-    sc.scrollTop = slot.box.offsetTop + mid * slot.box.offsetHeight - sc.clientHeight / 2;
-    const range = sc.scrollWidth - sc.clientWidth;
-    sc.scrollLeft = range > 1 ? p.hx * range : 0;
+    if (this.slots.length === 0) return true;
+    const to = scrollFor(this.pageBoxes(), p, this.scrollBox());
+    sc.scrollTop = to.top;
+    sc.scrollLeft = to.left;
     this.reportPage();
     this.o.onMove();
-    return !clamped;
+    return !to.clamped;
+  }
+
+  /** 中英對照帶著另一格的位置：同步用的位置，加上雙擊放大之前的縮放（另一格再雙擊時縮回同一個大小）。 */
+  syncPosition(): SwitchPosition & { base: number | null } {
+    return { ...this.getSwitchPosition(), base: this.zoomBefore };
+  }
+
+  /**
+   * 跟著另一格到同一處（中英對照）。換縮放時不重建頁面（和雙指縮放同一條路：頁框改大小、畫好的先撐著、只重畫看得到的），
+   * 捲動之後由這一格自己的捲動事件照常回報。交回設下去之後讀回來的位置（瀏覽器夾過的），讓呼叫的一方認得出回聲。
+   */
+  follow(p: SwitchPosition & { base: number | null }): FollowMark | null {
+    if (!this.pdf || this.slots.length === 0 || this.gesturing) return null;
+    const sc = this.o.scroll;
+    const z = clamp(p.zoom, MIN_ZOOM, MAX_ZOOM);
+    const rezoom = Math.abs(z - this.zoom) > 1e-3;
+    if (rezoom) {
+      this.zoom = z;
+      this.rescale();
+    }
+    this.zoomBefore = p.base;
+    const to = scrollFor(this.pageBoxes(), p, this.scrollBox());
+    sc.scrollTop = to.top;
+    sc.scrollLeft = to.left;
+    this.reportPage();
+    if (rezoom) this.refreshPages();
+    return this.followMark();
+  }
+
+  /** 現在捲到哪、縮放多少（認回聲用）。 */
+  followMark(): FollowMark {
+    return { top: this.o.scroll.scrollTop, left: this.o.scroll.scrollLeft, zoom: this.zoom };
+  }
+
+  private pageBoxes(): PageBox[] {
+    return this.slots.map((s) => ({ top: s.box.offsetTop, height: s.box.offsetHeight }));
+  }
+
+  private scrollBox() {
+    const sc = this.o.scroll;
+    return { top: sc.scrollTop, left: sc.scrollLeft, height: sc.clientHeight, width: sc.clientWidth, scrollWidth: sc.scrollWidth };
   }
 
   /** 回到一個位置。縮放先套用（重新排版），再捲到那一頁的那個高度、水平捲到那一欄。 */
@@ -1436,9 +1447,5 @@ export class PdfView {
     void this.pdf?.loadingTask.destroy();
     this.pdf = null;
   }
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
 }
 

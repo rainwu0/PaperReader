@@ -34,6 +34,11 @@ export const importStrings = {
   "error.ImportZipBackslash": "zip 的路徑用了反斜線，請重新壓縮。",
   "error.ImportZipBackslash.detail":
     "Windows 內建的 PowerShell 5.1 會這樣壓縮，zip 格式不允許。請改用 PowerShell 7 或其他壓縮工具重新壓縮。",
+  // 選到別的入口用的檔：錯誤種類 `ImportGotSyncPackage`、`ImportGotBackup`
+  "error.ImportGotSyncPackage": "這是同步包，請在設定的「同步」按「匯入同步包」。",
+  "error.ImportGotSyncPackage.detail": "文獻庫沒有任何改變。",
+  "error.ImportGotBackup": "這是備份檔，請用「從備份檔還原」。",
+  "error.ImportGotBackup.detail": "文獻庫沒有任何改變。",
   "import.expired": "匯入的內容變了，請重新匯入。",
 
   // 預覽

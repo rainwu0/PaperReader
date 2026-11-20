@@ -40,6 +40,8 @@ import { otherDevicePosition } from "./otherDevice";
 import { CardPop, SegmentPop } from "./SegmentParts";
 import { pageRegionHint } from "../../ext/pageRegions";
 import { useReaderViews, type SegTarget } from "./useReaderViews";
+import { BilingualPane, useTapOrDouble } from "./BilingualPane";
+import { clampSplit, SPLIT_DEFAULT } from "./viewSync";
 import { useHighlighting } from "./useHighlighting";
 import { QuickCard, useQuickTranslate } from "./QuickTranslate";
 import { offersQuick } from "./quickText";
@@ -63,14 +65,14 @@ import {
 const SAVE_AFTER_MS = 2000; // 停下來約兩秒就記下位置
 const FLASH_AFTER_MS = 500; // 跳到一條劃線之後等頁面畫好，再讓它閃一下（連結、筆記窗格、開啟時帶著的劃線都用這個）
 const BAR_HEIGHT = 49; // 頂列在狀態列以下的高度：觸控高度 48（`--tap`）加下框線 1
-const DOUBLE_TAP_MS = 300; // 兩下點在這麼短的時間內、這麼近的地方算雙擊（Android 的雙擊時限也是 300ms）
-const DOUBLE_TAP_SLOP = 40; // 像素
 const READ_ERROR_AGAIN_MS = 10_000; // 讀不出來的提示收掉之後，又有頁讀不出來時隔多久再說一次
 const PEEK_H = 56; // 筆記窗格縮成一條時的高度
 const LONG_PRESS_MS = 500; // 按住劃線這麼久開小選單
 const LONG_PRESS_SLOP = 10; // 像素：手指移動超過這麼多就是在捲動，不算長按
-// 這台裝置上記住的選擇：短評標記開著沒有（沒記過就是開）
+// 這台裝置上記住的選擇：短評標記開著沒有（沒記過就是開）、中英對照時譯本那一格占多少
 const COMMENTS_KEY = "pr-comments-show";
+const SPLIT_KEY = "pr-bilingual-split";
+const isFraction = (v: unknown): v is number => typeof v === "number" && v > 0 && v < 1;
 
 type LoadState =
   | { phase: "loading" }
@@ -121,6 +123,8 @@ export function Reader(props: {
   );
   // 捲動或縮放了（PDF 上點一段的小框要收起）
   const onMovedRef = useRef(() => {});
+  // 捲動或縮放了：中英對照時譯本那一格跟上（`BilingualPane` 放進來）
+  const bilingualMoved = useRef(() => {});
 
   const [detail, setDetail] = useState<PaperDetail | null>(null);
   const [materialId, setMaterialId] = useState<string | null>(null);
@@ -487,6 +491,7 @@ export function Reader(props: {
   const hlClosing = useRef(false);
   useEffect(() => {
     onMovedRef.current = () => {
+      bilingualMoved.current();
       views.onMoved();
       if (quick.isOpen) quick.close();
       // 捲動或縮放了：劃線的小選單收起（它對齊的位置已經不對）
@@ -695,8 +700,6 @@ export function Reader(props: {
 
   // 點頁面：單擊要先等一下，確定不是雙擊；雙擊是放大到那一欄的寬度，再雙擊縮回（`PdfView.toggleColumnZoom`）。
   // 單擊：小框開著就收起；「點內容」開著時，點劃線開短評、點疊譯文暫看原文、點一段出小框；其餘顯示或隱藏頂列
-  const lastTap = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
-  useEffect(() => () => window.clearTimeout(lastTap.current?.timer), []);
   const singleTap = (x: number, y: number) => {
     // 劃線的小選單、快速翻譯的卡片開著：點別處只是收起它
     if (props.sheets.includes("hlPop") || quick.isOpen) {
@@ -705,25 +708,13 @@ export function Reader(props: {
     }
     if (!views.tap(x, y, () => hl.tapHighlight(x, y), () => commentAt(x, y))) setBarVisible((v) => !v);
   };
+  const tapOrDouble = useTapOrDouble(singleTap, (x, y) => void viewRef.current?.toggleColumnZoom(x, y));
   const onPageTap = (e: React.MouseEvent) => {
     if (brushOn) return;
     // 長按劃線剛開了小選單：放開手指的那一下不算點（不然馬上又收起）
     if (Date.now() - longPressAt.current < 700) return;
     if ((window.getSelection()?.toString() ?? "") !== "") return;
-    const { clientX: x, clientY: y } = e;
-    const prev = lastTap.current;
-    if (prev && e.timeStamp - prev.t < DOUBLE_TAP_MS && Math.hypot(x - prev.x, y - prev.y) < DOUBLE_TAP_SLOP) {
-      window.clearTimeout(prev.timer);
-      lastTap.current = null;
-      void viewRef.current?.toggleColumnZoom(x, y);
-      return;
-    }
-    window.clearTimeout(prev?.timer);
-    const timer = window.setTimeout(() => {
-      lastTap.current = null;
-      singleTap(x, y);
-    }, DOUBLE_TAP_MS);
-    lastTap.current = { t: e.timeStamp, x, y, timer };
+    tapOrDouble(e);
   };
 
   // ---------- 筆刷 ----------
@@ -867,13 +858,14 @@ export function Reader(props: {
   // ---------- 移除一份材料（譯本選單、重點筆記） ----------
 
   /**
-   * 移到回收區，不先問，給「復原」。正在看的就是它（或疊譯文開著、要移除的是逐段譯文）時先回到原文。
+   * 移到回收區，不先問，給「復原」。正在看的就是它（或疊譯文開著、要移除的是逐段譯文；或中英對照的譯本那一格開著它）時先回到原文。
    * 復原：回收區裡這篇、這一項最晚移除的那一份放回來（核心的移除不交回回收區的資料夾名稱，和文獻資訊的做法相同）。
    */
   const removeMaterialHere = async (id: string) => {
     const d = detailRef.current;
     if (!d) return;
-    if (id === materialId || (id === views.overlayMat?.id && views.overlayActive)) {
+    const shownInPane = id === views.bilingual?.materialId || (id === views.overlayMat?.id && !!views.bilingual?.overlay);
+    if (id === materialId || (id === views.overlayMat?.id && views.overlayActive) || shownInPane) {
       views.showSource();
       // 等這一份的檢視關掉，再把檔案移走（不讓它還在讀的那一段報讀不出來）
       await new Promise((r) => window.setTimeout(r, 150));
@@ -971,7 +963,7 @@ export function Reader(props: {
       id: "source",
       label: t("reader.tool.source"),
       icon: <SourceIcon />,
-      active: onSource && !overlayActive,
+      active: onSource && !overlayActive && !views.bilingual,
       view: true,
       onClick: views.showSource,
     },
@@ -1084,13 +1076,22 @@ export function Reader(props: {
   const paneWidth = pane.open && pane.size === "half" && landscape ? Math.round(pane.split * vp.w) : 0;
   const paneStyle: React.CSSProperties =
     pane.size === "full" ? {} : landscape && pane.size === "half" ? { width: paneWidth } : { height: paneHeight };
-  const readerClass = ["screen reader", prefs.prefs.dark_pages ? "dark-pages" : "", pane.open ? "pane-open" : ""]
+  // 中英對照：原文這一格讓出譯本那一格占的地方（上下分或左右分，比例記在這台裝置上）
+  const [split, setSplit] = useLocalPref(SPLIT_KEY, SPLIT_DEFAULT, isFraction);
+  const bi = views.bilingual;
+  const readerClass = [
+    "screen reader",
+    prefs.prefs.dark_pages ? "dark-pages" : "",
+    pane.open ? "pane-open" : "",
+    bi ? `bilingual ${landscape ? "bi-cols" : "bi-rows"}` : "",
+  ]
     .filter(Boolean)
     .join(" ");
   const rootStyle = {
     "--pane-lift": dockedBottom && dockH > 0 ? `${dockH}px` : "var(--inset-bottom)",
     "--pane-h": `${pane.size === "full" ? 0 : paneHeight}px`,
     "--pane-w": `${pane.size === "full" ? 0 : paneWidth}px`,
+    "--bi-split": String(clampSplit(split)),
   } as React.CSSProperties;
 
   return (
@@ -1117,6 +1118,24 @@ export function Reader(props: {
       >
         <div className="reader-wrap" ref={wrapRef} />
       </div>
+      {bi ? (
+        <BilingualPane
+          paperId={paperId}
+          materialId={bi.materialId}
+          overlay={bi.overlay}
+          segments={bi.overlay ? (views.overlayDoc?.segments ?? null) : null}
+          mainRef={viewRef}
+          mainScrollRef={scrollRef}
+          mainReady={ready}
+          mainMoved={bilingualMoved}
+          landscape={landscape}
+          onSplit={setSplit}
+          tapContent={views.tapContent}
+          onTap={() => setBarVisible((v) => !v)}
+          onMessage={setToast}
+          onFailed={views.showSource}
+        />
+      ) : null}
 
       {saveNote ? (
         <div className="reader-note" role="status" onClick={() => setSaveNote(null)}>

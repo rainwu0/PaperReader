@@ -57,10 +57,75 @@ fn peek_kind_tells_sync_packages_backups_and_other_files_apart() {
     zip_with(&bad_json, &[("manifest.json", b"{nope")]);
     let not_zip = out.path().join("p.pdf");
     fs::write(&not_zip, fake_bytes(1, 200)).unwrap();
-    for f in [&other_kind, &no_manifest, &bad_json, &not_zip] {
+    // 匯入清單包在一層資料夾裡：不在根目錄，不算整批匯入用的 zip
+    let nested_import = out.path().join("i2.zip");
+    zip_with(
+        &nested_import,
+        &[("papers/paperreader-import.json", b"{}"), ("a.pdf", b"x")],
+    );
+    for f in [
+        &other_kind,
+        &no_manifest,
+        &bad_json,
+        &not_zip,
+        &nested_import,
+    ] {
         assert_eq!(peek_kind(f).unwrap(), ArchiveKind::Other, "{f:?}");
     }
     assert!(peek_kind(&out.path().join("missing.zip")).is_err());
+}
+
+/// 根目錄有匯入清單、沒有同步包或備份檔的清單：整批匯入用的 zip。清單的內容不看。
+/// 同步包或備份檔的清單在時，照那一種。
+#[test]
+fn peek_kind_tells_import_zips_apart() {
+    let out = tempfile::tempdir().unwrap();
+    let import = out.path().join("i.zip");
+    zip_with(
+        &import,
+        &[
+            (
+                "paperreader-import.json",
+                br#"{"kind":"paperreader-import","format":1,"papers":[]}"#,
+            ),
+            ("pdf/a.pdf", b"%PDF-1.4"),
+        ],
+    );
+    let unreadable_list = out.path().join("u.zip");
+    zip_with(&unreadable_list, &[("paperreader-import.json", b"{nope")]);
+    // `manifest.json` 的 `kind` 不是同步包也不是備份檔，但匯入清單在
+    let with_other_manifest = out.path().join("m.zip");
+    zip_with(
+        &with_other_manifest,
+        &[
+            ("manifest.json", br#"{"kind":"something-else"}"#),
+            ("paperreader-import.json", b"{}"),
+        ],
+    );
+    for f in [&import, &unreadable_list, &with_other_manifest] {
+        assert_eq!(peek_kind(f).unwrap(), ArchiveKind::ImportZip, "{f:?}");
+    }
+    let sync_with_list = out.path().join("s.zip");
+    zip_with(
+        &sync_with_list,
+        &[
+            ("manifest.json", br#"{"kind":"paperreader-sync"}"#),
+            ("paperreader-import.json", b"{}"),
+        ],
+    );
+    assert_eq!(
+        peek_kind(&sync_with_list).unwrap(),
+        ArchiveKind::SyncPackage
+    );
+    let backup_with_list = out.path().join("b.zip");
+    zip_with(
+        &backup_with_list,
+        &[
+            ("manifest.json", br#"{"kind":"paperreader-backup"}"#),
+            ("paperreader-import.json", b"{}"),
+        ],
+    );
+    assert_eq!(peek_kind(&backup_with_list).unwrap(), ArchiveKind::Backup);
 }
 
 /// 唯讀有兩個原因：格式較新、合併沒做完。只有後者是「合併沒做完」。

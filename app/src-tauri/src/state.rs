@@ -497,8 +497,9 @@ fn remove_empty_skeleton(dir: &Path) {
     prune(dir);
 }
 
-/// 依清單的種類放出來（核心的 `peek_kind` 只看清單的 `kind`）：同步包在 `accept_sync` 時加入，否則說「這是同步包」；
-/// 備份檔一律從備份檔還原；都不是：加入時說讀不懂，從備份檔還原時說「這不是備份檔」。都只寫到 `target`
+/// 依清單的種類放出來（核心的 `peek_kind` 只看清單的 `kind` 與匯入清單在不在）：同步包在 `accept_sync` 時加入，否則說「這是同步包」；
+/// 備份檔一律從備份檔還原；整批匯入用的 zip 說該用「整批匯入」；都不是：加入時說讀不懂，從備份檔還原時說
+/// 「這不是備份檔」。都只寫到 `target`
 /// （不存在或空的資料夾）。
 fn unpack(
     archive: &Path,
@@ -520,6 +521,10 @@ fn unpack(
         Peeked::Backup => restore_backup(archive, target, device_id)
             .map(|r| (r, ArchiveKind::Backup))
             .map_err(crate::error::sync_error),
+        Peeked::ImportZip => Err(ApiError::new(
+            ErrorKind::SyncGotImportZip,
+            "SyncGotImportZip",
+        )),
         Peeked::Other if accept_sync => Err(ApiError::new(ErrorKind::Unreadable, "Unreadable")),
         Peeked::Other => Err(ApiError::new(ErrorKind::NotBackupFile, "NotBackupFile")),
     }

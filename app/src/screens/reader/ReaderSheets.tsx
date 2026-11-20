@@ -115,6 +115,8 @@ export interface ViewOption {
   removable?: string;
   /** 「移除」讀屏念的名稱（和這一列的名稱不同時，例如疊譯文那一列移除的是逐段譯文）。 */
   removeName?: string;
+  /** 現在不能選：寫在名稱下面的原因。 */
+  disabled?: string;
 }
 
 /**
@@ -132,8 +134,9 @@ export function ViewsSheet(props: {
       <ul className="outline-list">
         {props.options.map((o) => (
           <li key={o.id} className={o.removable ? "view-row" : undefined}>
-            <button type="button" className="outline-item" aria-current={o.current} onClick={o.run}>
+            <button type="button" className="outline-item" aria-current={o.current} disabled={!!o.disabled} onClick={o.run}>
               {o.label}
+              {o.disabled ? <span className="view-note">{o.disabled}</span> : null}
             </button>
             {o.removable ? (
               <button

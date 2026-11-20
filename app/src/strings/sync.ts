@@ -154,6 +154,8 @@ export const syncStrings = {
   "error.SyncOwnPackage.detail": "請到另一台匯入它。文獻庫沒有任何改變。",
   "error.SyncBackupFile": "這是備份檔，請用「從備份檔還原」。",
   "error.SyncBackupFile.detail": "文獻庫沒有任何改變。",
+  "error.SyncGotImportZip": "這是整批匯入用的 zip，請在首頁按「＋」，選「整批匯入」。",
+  "error.SyncGotImportZip.detail": "它的根目錄有匯入清單 paperreader-import.json。文獻庫沒有任何改變。",
   "error.SyncIncomplete": "加入要用完整的同步包。",
   "error.SyncIncomplete.detail": "在另一台打開「完整的同步包」再匯出一次。",
   "error.NotBackupFile": "這不是備份檔。",

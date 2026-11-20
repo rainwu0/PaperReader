@@ -56,6 +56,8 @@ pub enum ErrorKind {
     SyncOwnPackage,
     /// 選到的是備份檔，不是同步包（核心 `backup file, not a sync package`）。
     SyncBackupFile,
+    /// 匯入同步包、從另一台加入、從備份檔還原時選到的是整批匯入用的 zip（根目錄有匯入清單）。
+    SyncGotImportZip,
     /// 加入要用完整的同步包（核心 `package is not complete`）。
     SyncIncomplete,
     /// 從備份檔還原時選到的不是備份檔，也不是同步包。
@@ -64,6 +66,10 @@ pub enum ErrorKind {
     RestoreGotSyncPackage,
     /// 整批匯入的 zip 項目名稱用了反斜線（Windows PowerShell 5.1 做的）。
     ImportZipBackslash,
+    /// 整批匯入時選到的是同步包（要到「同步」匯入）。
+    ImportGotSyncPackage,
+    /// 整批匯入時選到的是備份檔（要用「從備份檔還原」）。
+    ImportGotBackup,
     /// 搬到共用空間：那裡（`Documents/PaperReader`）已經有文獻庫或別的東西。
     SharedNotEmpty,
     /// 搬到共用空間：搬過去的與原本的核對不符，或有檔案沒能放進暫存的備份檔。
@@ -156,14 +162,21 @@ pub fn sync_error(e: LibError) -> ApiError {
     ApiError::new(kind, format!("{kind:?}"))
 }
 
-/// 匯入同步包之前先看清單：備份檔說「這是備份檔，請用從備份檔還原」，都不是說讀不懂（不必等核心解開才知道）。
+/// 匯入同步包之前先看清單（不必等核心解開才知道）：備份檔與整批匯入用的 zip 各說該用哪個入口，
+/// 都不是說讀不懂。
 pub fn expect_sync_package(archive: &std::path::Path) -> ApiResult<()> {
+    sync_entry_accepts(paperreader_core::sync::package::peek_kind(archive)?)
+}
+
+fn sync_entry_accepts(kind: paperreader_core::store::ArchiveKind) -> ApiResult<()> {
     use paperreader_core::store::ArchiveKind;
-    match paperreader_core::sync::package::peek_kind(archive)? {
-        ArchiveKind::SyncPackage => Ok(()),
-        ArchiveKind::Backup => Err(ApiError::new(ErrorKind::SyncBackupFile, "SyncBackupFile")),
-        ArchiveKind::Other => Err(ApiError::new(ErrorKind::Unreadable, "Unreadable")),
-    }
+    let kind = match kind {
+        ArchiveKind::SyncPackage => return Ok(()),
+        ArchiveKind::Backup => ErrorKind::SyncBackupFile,
+        ArchiveKind::ImportZip => ErrorKind::SyncGotImportZip,
+        ArchiveKind::Other => ErrorKind::Unreadable,
+    };
+    Err(ApiError::new(kind, format!("{kind:?}")))
 }
 
 impl From<tauri_plugin_paperreader::Error> for ApiError {
@@ -277,6 +290,25 @@ mod tests {
             assert_eq!(api.kind, kind);
             assert!(!api.detail.contains("secret") && !api.detail.contains('/'));
         }
+    }
+
+    /// 匯入同步包選錯檔：備份檔、整批匯入用的 zip 各有自己的種類，其餘說讀不懂。
+    #[test]
+    fn sync_entry_tells_which_entry_a_wrong_file_belongs_to() {
+        use paperreader_core::store::ArchiveKind;
+        assert!(sync_entry_accepts(ArchiveKind::SyncPackage).is_ok());
+        let kind = |k| sync_entry_accepts(k).unwrap_err().kind;
+        assert_eq!(kind(ArchiveKind::Backup), ErrorKind::SyncBackupFile);
+        assert_eq!(kind(ArchiveKind::ImportZip), ErrorKind::SyncGotImportZip);
+        assert_eq!(kind(ArchiveKind::Other), ErrorKind::Unreadable);
+        // 不是 zip 的檔照樣是讀不懂
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("a.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4").unwrap();
+        assert_eq!(
+            expect_sync_package(&pdf).unwrap_err().kind,
+            ErrorKind::Unreadable
+        );
     }
 
     #[test]

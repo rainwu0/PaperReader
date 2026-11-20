@@ -1,4 +1,4 @@
-// 閱讀畫面的幾種看法與段落：原文、譯本 PDF、原頁疊譯文、譯文之間怎麼切換、記住上次選的哪一份，
+// 閱讀畫面的幾種看法與段落：原文、譯本 PDF、原頁疊譯文、中英對照、譯文之間怎麼切換、記住上次選的哪一份，
 // 以及譯文疊加檔的段落在 PDF 上的方框（點一段的小框、疊譯文暫看原文、從譯文回到同一段）。
 // 譯文疊加檔在這裡只讀一份（`useOverlayDoc`），譯文、疊譯文、小框、更新譯本 PDF 共用。
 // 材料的開啟、捲動、縮放仍由閱讀畫面與 `PdfView` 管；這裡只決定去哪裡。
@@ -21,11 +21,20 @@ import { useOverlayDoc, useRebuild } from "./SegmentParts";
 import { nearestSegment, newestFirst, preferredTranslation, shownText, type Seg } from "./segments";
 import { relativeDay, timeOfDay } from "../../format";
 
-// 這台裝置上記住的選擇：點內容帶出功能、每篇上次看的譯本
+// 這台裝置上記住的選擇：點內容帶出功能、每篇上次看的譯本、每篇上次是不是用中英對照看
 const TAP_KEY = "pr-tap-content";
 const PICK_KEY = "pr-last-translation";
+const BILINGUAL_KEY = "pr-bilingual";
 const isPicks = (v: unknown): v is Record<string, string> =>
   !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
+const isFlags = (v: unknown): v is Record<string, boolean> =>
+  !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "boolean");
+
+/** 中英對照的譯本那一格看哪一份：譯本 PDF，或原文加上譯文疊加（原頁疊譯文）。 */
+export interface BilingualTarget {
+  materialId: string;
+  overlay: boolean;
+}
 
 /** 要去的一段（頁序從 0 起、PDF 頁面座標）。 */
 export type SegTarget = Pick<Seg, "page" | "bbox">;
@@ -104,6 +113,23 @@ export function useReaderViews(o: {
     picks[paperId] ?? null,
   );
   const remember = (pick: string) => setPicks({ ...picks, [paperId]: pick });
+
+  // 中英對照：上面（橫拿時左邊）原文，下面（右邊）上次選的那一份譯本。原文那一格就是平常的閱讀畫面
+  const [bilingualFlags, setBilingualFlags] = useLocalPref(BILINGUAL_KEY, {}, isFlags);
+  const rememberBilingual = (on: boolean) => {
+    if ((bilingualFlags[paperId] ?? false) !== on) setBilingualFlags({ ...bilingualFlags, [paperId]: on });
+  };
+  const [bilingualOn, setBilingualOn] = useState(false);
+  const bilingual: BilingualTarget | null =
+    bilingualOn && onSource && source && preferred
+      ? preferred.kind === "pdf"
+        ? { materialId: preferred.id, overlay: false }
+        : { materialId: source.id, overlay: true }
+      : null;
+  // 原文那一格換到了別份材料（例如跳到譯本上的一條劃線）：回到單格
+  useEffect(() => {
+    if (bilingualOn && materialId !== null && source && materialId !== source.id) setBilingualOn(false);
+  }, [bilingualOn, materialId, source]);
 
   // ---------- 方框：點一段、疊譯文 ----------
 
@@ -331,6 +357,7 @@ export function useReaderViews(o: {
 
   function showOverlay() {
     if (!overlayMat) return;
+    setBilingualOn(false);
     if (!onSource) o.switchTo(source?.id);
     setOverlayOn(true);
     if (hintPending("overlay")) o.offerHint("overlay");
@@ -338,19 +365,31 @@ export function useReaderViews(o: {
   }
   const showSource = () => {
     setOverlayOn(false);
+    setBilingualOn(false);
     o.switchTo(source?.id);
   };
   const showPdf = (id: string) => {
     setOverlayOn(false);
+    setBilingualOn(false);
     o.switchTo(id);
+  };
+  /** 中英對照：原文那一格回到原文（停在同一處），譯本那一格由 `BilingualPane` 開。 */
+  const showBilingual = () => {
+    if (!preferred) return;
+    setOverlayOn(false);
+    if (!onSource) o.switchTo(source?.id);
+    setBilingualOn(true);
   };
 
   /**
-   * 工具箱「譯本」按一下：直接切到上次選的那一份（第一次：產生的 → 自己加入的 → 原頁疊譯文，A14）。
+   * 工具箱「譯本」按一下：直接切到上次選的那一份（第一次：產生的 → 自己加入的 → 原頁疊譯文）；
+   * 上次選的是中英對照就開對照，對照開著時再按一次回到單格的原文。
    * 沒有譯本但有重點筆記就打開重點筆記；什麼都沒有就說怎麼產生。換一份由長按或小箭頭的選單。
    */
   function openTranslation() {
-    if (preferred?.kind === "pdf") showPdf(preferred.id);
+    if (bilingual) showSource();
+    else if (preferred && bilingualFlags[paperId]) showBilingual();
+    else if (preferred?.kind === "pdf") showPdf(preferred.id);
     else if (preferred?.kind === "overlay") showOverlay();
     else if (o.hasDigest) o.openDigest();
     else
@@ -360,13 +399,13 @@ export function useReaderViews(o: {
       });
   }
   /** 頂列的互換鈕：原文 ⇄ 譯本（上次選的那一份），停在同一處。 */
-  const onTranslation = onTranslationPdf || overlayActive;
+  const onTranslation = onTranslationPdf || overlayActive || !!bilingual;
   const swap = () => (onTranslation ? showSource() : openTranslation());
 
   /** 換一份的選單（工具箱「譯本」長按或小箭頭）：選了哪一份譯本就記住，下次按一下直接到它。 */
   const viewOptions = (pick: (run: () => void) => () => void): ViewOption[] => {
     const out: ViewOption[] = [];
-    if (source) out.push({ id: "source", label: t("reader.tool.source"), current: onSource && !overlayActive, run: pick(showSource) });
+    if (source) out.push({ id: "source", label: t("reader.tool.source"), current: onSource && !overlayActive && !bilingual, run: pick(showSource) });
     // 每一份寫上做出來的時間（和文獻資訊的材料清單同一個說法），幾份產生的譯本分得出哪份是新的
     for (const m of translationPdfs) {
       const time = m.provenance?.time;
@@ -377,6 +416,7 @@ export function useReaderViews(o: {
         current: materialId === m.id,
         run: pick(() => {
           remember(m.id);
+          rememberBilingual(false);
           showPdf(m.id);
         }),
         removable: m.id,
@@ -390,13 +430,25 @@ export function useReaderViews(o: {
         current: overlayActive,
         run: pick(() => {
           remember("overlay");
+          rememberBilingual(false);
           showOverlay();
         }),
         removable: overlayMat.id,
         removeName: t("info.material.overlay"),
       });
-      out.push({ id: "text", label: t("reader.view.text"), current: false, run: pick(openText) });
     }
+    // 中英對照：譯本那一格是上次選的那一份；這篇沒有譯本時列出來但不能選，說明原因
+    out.push({
+      id: "bilingual",
+      label: t("reader.view.bilingual"),
+      current: !!bilingual,
+      run: pick(() => {
+        rememberBilingual(true);
+        showBilingual();
+      }),
+      ...(preferred ? {} : { disabled: t("reader.view.bilingual.none") }),
+    });
+    if (overlayMat) out.push({ id: "text", label: t("reader.view.text"), current: false, run: pick(openText) });
     return out;
   };
 
@@ -411,6 +463,8 @@ export function useReaderViews(o: {
     tapContent,
     setTapContent,
     openTranslation,
+    bilingual,
+    overlayDoc: doc,
     showSource,
     showOverlay,
     swap,

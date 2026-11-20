@@ -407,12 +407,16 @@ pub struct SyncNotice {
     pub conflicts: Vec<String>,
 }
 
-/// 一份檔是哪一種（只看清單的 `kind`，不驗整份）：畫面用來分辨選到的是同步包、備份檔還是都不是。
+/// 一份檔是哪一種（只看清單的 `kind` 與匯入清單在不在，不驗整份）：畫面用來分辨選到的是同步包、
+/// 備份檔、整批匯入用的 zip，還是都不是。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum ArchiveKind {
     SyncPackage,
     Backup,
-    /// 不是 zip、沒有清單、清單讀不懂或不是這兩種。
+    /// 不是同步包也不是備份檔，但根目錄有匯入清單 `paperreader-import.json`（整批匯入用的 zip）。
+    /// 清單的內容不看。
+    ImportZip,
+    /// 不是 zip，或以上都不是。
     Other,
 }
 

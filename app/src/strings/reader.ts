@@ -140,4 +140,11 @@ export const readerStrings = {
   "reader.brush.clear": "清除這一頁的筆跡",
   "reader.brush.cleared": "已清除這一頁的筆跡",
   "reader.brush.failed": "筆跡沒有存下來。",
+
+  // 中英對照：原文與譯本同時顯示，捲動與縮放一起動
+  "reader.view.bilingual": "中英對照",
+  "reader.view.bilingual.none": "這篇還沒有譯本。翻譯或加入譯本 PDF 之後才能對照。",
+  "reader.bilingual.pane": "譯本",
+  "reader.bilingual.split": "拖動調整原文與譯本的大小",
+  "reader.bilingual.failed": "譯本打不開，只顯示原文。",
 } as const;

@@ -180,38 +180,43 @@ pub(crate) fn open_package(archive: &Path) -> Result<OpenedPackage> {
     })
 }
 
-/// 只看一份檔的清單 `kind`：同步包、備份檔、或都不是（不是 zip、沒有清單、清單讀不懂）。不驗整份、不寫任何東西。
-/// 檔案打不開時交回錯誤。
+/// 只看一份檔是哪一種：清單 `manifest.json` 的 `kind` 是同步包或備份檔就是那一種；否則根目錄有匯入清單
+/// `paperreader-import.json` 的是整批匯入用的 zip（清單的內容不看）；其餘（不是 zip、兩份清單都沒有、
+/// 清單讀不懂）都不是。不驗整份、不寫任何東西。檔案打不開時交回錯誤。
 pub fn peek_kind(archive: &Path) -> Result<crate::store::ArchiveKind> {
     use crate::store::ArchiveKind;
-    use std::io::Read;
     let file = fs::File::open(archive).map_err(|e| io_error(archive, e))?;
     let Ok(mut zip) = zip::ZipArchive::new(file) else {
         return Ok(ArchiveKind::Other);
     };
-    let Ok(entry) = zip.by_name(MANIFEST_NAME) else {
-        return Ok(ArchiveKind::Other);
-    };
+    match manifest_kind(&mut zip).as_deref() {
+        Some(SYNC_KIND) => return Ok(ArchiveKind::SyncPackage),
+        Some(MANIFEST_KIND) => return Ok(ArchiveKind::Backup),
+        _ => {}
+    }
+    Ok(
+        if zip.index_for_name(crate::import::MANIFEST_NAME).is_some() {
+            ArchiveKind::ImportZip
+        } else {
+            ArchiveKind::Other
+        },
+    )
+}
+
+/// 清單 `manifest.json` 的 `kind`；沒有清單、太大、讀不懂時是 `None`。
+fn manifest_kind(zip: &mut zip::ZipArchive<fs::File>) -> Option<String> {
+    use std::io::Read;
+    let entry = zip.by_name(MANIFEST_NAME).ok()?;
     if entry.size() > MAX_MANIFEST_BYTES {
-        return Ok(ArchiveKind::Other);
+        return None;
     }
     let mut text = Vec::new();
-    if entry
-        .take(MAX_MANIFEST_BYTES)
-        .read_to_end(&mut text)
-        .is_err()
-    {
-        return Ok(ArchiveKind::Other);
-    }
-    let kind =
-        serde_json::from_slice::<serde_json::Value>(text.strip_prefix(&BOM).unwrap_or(&text))
-            .ok()
-            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from));
-    Ok(match kind.as_deref() {
-        Some(SYNC_KIND) => ArchiveKind::SyncPackage,
-        Some(MANIFEST_KIND) => ArchiveKind::Backup,
-        _ => ArchiveKind::Other,
-    })
+    entry.take(MAX_MANIFEST_BYTES).read_to_end(&mut text).ok()?;
+    serde_json::from_slice::<serde_json::Value>(text.strip_prefix(&BOM).unwrap_or(&text))
+        .ok()?
+        .get("kind")?
+        .as_str()
+        .map(String::from)
 }
 
 /// 解出到 `dest`，逐一驗大小與指紋（同從備份檔還原）。

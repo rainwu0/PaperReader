@@ -14,6 +14,7 @@ use paperreader_core::error::LibError;
 use paperreader_core::import::{
     ImportContainer, ImportPreview, ImportReport, ImportScan, ImportStep, ZIP_BACKSLASH,
 };
+use paperreader_core::store::ArchiveKind;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -133,23 +134,44 @@ pub async fn scan_import(
                     Ok(ImportScanned::cancelled())
                 }
                 Err(e) => {
+                    // 先判斷再清：判斷時要看 zip 的複本
+                    let err = scan_error(&container, e);
                     slot.clear();
-                    Err(scan_error(e))
+                    Err(err)
                 }
             }
         })
         .await
 }
 
-/// 掃描的錯誤：zip 的項目名稱用了反斜線（核心的 `reason` 以 `ZIP_BACKSLASH` 開頭）轉成畫面認得的種類，
-/// 畫面直接請使用者換工具重新壓縮；其餘照一般的對應。`reason` 本身不交給畫面。
-fn scan_error(e: LibError) -> ApiError {
+/// 掃描的錯誤轉成畫面認得的種類；`reason` 本身不交給畫面。
+/// - zip 的項目名稱用了反斜線（核心的 `reason` 以 `ZIP_BACKSLASH` 開頭）：畫面直接請使用者換工具重新壓縮。
+/// - 讀不懂的 zip 其實是同步包或備份檔：說該用哪個入口。只在掃描已經失敗時才看，掃描得了的 zip 照常匯入。
+/// - 其餘照一般的對應。
+fn scan_error(container: &ImportContainer, e: LibError) -> ApiError {
     match &e {
         LibError::Unreadable { reason, .. } if reason.starts_with(ZIP_BACKSLASH) => {
             ApiError::new(ErrorKind::ImportZipBackslash, "ImportZipBackslash")
         }
+        LibError::Unreadable { .. } => match container {
+            ImportContainer::Zip(p) => paperreader_core::sync::package::peek_kind(p)
+                .ok()
+                .and_then(wrong_entry)
+                .unwrap_or_else(|| e.into()),
+            ImportContainer::Folder(_) => e.into(),
+        },
         _ => e.into(),
     }
+}
+
+/// 整批匯入選到別的入口用的檔：同步包、備份檔各有自己的種類；其餘是 `None`。
+fn wrong_entry(kind: ArchiveKind) -> Option<ApiError> {
+    let kind = match kind {
+        ArchiveKind::SyncPackage => ErrorKind::ImportGotSyncPackage,
+        ArchiveKind::Backup => ErrorKind::ImportGotBackup,
+        ArchiveKind::ImportZip | ArchiveKind::Other => return None,
+    };
+    Some(ApiError::new(kind, format!("{kind:?}")))
 }
 
 /// 把掃描的結果和文獻庫比對成預覽（持鎖，時間短）。除了記憶體裡的計畫，什麼都不寫。
@@ -267,17 +289,75 @@ pub async fn material_open_external(
 mod tests {
     use super::*;
 
+    fn unreadable(reason: &str) -> LibError {
+        LibError::Unreadable {
+            path: "x.zip".into(),
+            reason: reason.into(),
+        }
+    }
+
     #[test]
     fn backslash_zip_gets_its_own_kind() {
-        let e = LibError::Unreadable {
-            path: "x.zip".into(),
-            reason: format!("{ZIP_BACKSLASH}: pdf\\a.pdf"),
-        };
-        assert_eq!(scan_error(e).kind, ErrorKind::ImportZipBackslash);
-        let e = LibError::Unreadable {
-            path: "x.zip".into(),
-            reason: "not an import manifest".into(),
-        };
-        assert_eq!(scan_error(e).kind, ErrorKind::Unreadable);
+        let zip = ImportContainer::Zip("x.zip".into());
+        let e = unreadable(&format!("{ZIP_BACKSLASH}: pdf\\a.pdf"));
+        assert_eq!(scan_error(&zip, e).kind, ErrorKind::ImportZipBackslash);
+        // 檔不存在、看不出是哪一種：照一般的對應
+        let e = unreadable("not an import manifest");
+        assert_eq!(scan_error(&zip, e).kind, ErrorKind::Unreadable);
+    }
+
+    /// 整批匯入選到同步包、備份檔：各有自己的種類；整批匯入用的 zip 與別的檔照一般的對應。
+    #[test]
+    fn sync_packages_and_backups_get_their_own_kinds() {
+        let kind = |k| wrong_entry(k).map(|e| e.kind);
+        assert_eq!(
+            kind(ArchiveKind::SyncPackage),
+            Some(ErrorKind::ImportGotSyncPackage)
+        );
+        assert_eq!(kind(ArchiveKind::Backup), Some(ErrorKind::ImportGotBackup));
+        assert_eq!(kind(ArchiveKind::ImportZip), None);
+        assert_eq!(kind(ArchiveKind::Other), None);
+
+        // 真的同步包與備份檔：掃描失敗後認得出來
+        let lib_dir = tempfile::tempdir().unwrap();
+        let mut lib = paperreader_core::local::LocalLibrary::open(
+            lib_dir.path(),
+            "01JCK3T1A2B3C4D5E6F7G8H9JK",
+        )
+        .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let pkg = out.path().join("s.zip");
+        lib.export_sync_package(
+            &pkg,
+            paperreader_core::store::SyncMode::Full,
+            None,
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let backup = out.path().join("b.zip");
+        lib.export_backup(&backup, &mut |_, _| {}).unwrap();
+        for (file, want) in [
+            (pkg, ErrorKind::ImportGotSyncPackage),
+            (backup, ErrorKind::ImportGotBackup),
+        ] {
+            let zip = ImportContainer::Zip(file);
+            let e = paperreader_core::import::scan_import(&zip, &mut |_, _| true).unwrap_err();
+            assert_eq!(scan_error(&zip, e).kind, want);
+        }
+
+        // 選到的不是 zip、或選的是資料夾：照樣是讀不懂
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("a.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4").unwrap();
+        let e = unreadable("invalid Zip archive");
+        assert_eq!(
+            scan_error(&ImportContainer::Zip(pdf), e).kind,
+            ErrorKind::Unreadable
+        );
+        let e = unreadable("paperreader-import.json is missing");
+        assert_eq!(
+            scan_error(&ImportContainer::Folder(dir.path().into()), e).kind,
+            ErrorKind::Unreadable
+        );
     }
 }
