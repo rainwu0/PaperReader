@@ -18,6 +18,7 @@ PaperReader keeps your library on your own device as ordinary folders and files.
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Features](#features)
 - [Not available](#not-available)
 - [Install](#install)
@@ -26,6 +27,54 @@ PaperReader keeps your library on your own device as ordinary folders and files.
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
+
+## Screenshots
+
+The app's interface is in Traditional Chinese.
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/readme-home.webp" alt="Home: the library list, each paper marked unread, read to a page, or read; papers with a translation carry a 譯 badge"></td>
+    <td width="33%"><img src="docs/images/readme-toolbox.webp" alt="Reading view with the floating toolbox open"></td>
+    <td width="33%"><img src="docs/images/readme-highlight.webp" alt="A highlight with its comment shown in the pane below"></td>
+  </tr>
+  <tr>
+    <td>Home: each paper shows unread, the page you reached, or read; papers with a translation carry a 譯 badge.</td>
+    <td>Reading: the toolbox switches between original, translated PDF and translated text, and holds highlight, brush, jump to page and outline.</td>
+    <td>Highlights and comments: tap a highlight with a comment to open it below.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/readme-bilingual.webp" alt="Side-by-side view: original on top, translation below, scrolling together"></td>
+    <td><img src="docs/images/readme-text.webp" alt="Translated text: the whole translation reflowed for a phone screen"></td>
+    <td><img src="docs/images/readme-translate.webp" alt="Translation panel with Firefox Translations (offline) selected"></td>
+  </tr>
+  <tr>
+    <td>Bilingual view: original and translation in two panes that scroll together.</td>
+    <td>Translated text: reflowed for a phone screen; tap a paragraph to see the original or edit it in place.</td>
+    <td>Translate: choose Firefox Translations (offline) to translate on the phone without sending anything.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/readme-notes.webp" alt="Notes pane: overall thoughts on the paper, with its highlights and comments"></td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>Notes pane: your thoughts on the whole paper (Markdown) alongside its highlights and comments.</td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
+
+The papers in the screenshots are all licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/):
+
+- *Physics-Aware Transformer-Based Beamforming Optimization for Near-Field E-MIMO ISAC Systems*, Mohsin Ali, Abdulahi Abiodun Badrudeen, Azharul Islam, Sunwoo Kim, [arXiv:2611.16305](https://arxiv.org/abs/2611.16305)
+- *Context-Predictive Low-Rank Adaptation for Face Presentation Attack Detection*, Aminu Yusuf, Shakeel Muhammad Ibrahim, Sulaimon Oyeniyi Adebayo, Muhammad Sohail Ibrahim, Muhammad Shahid Jabbar, Shujaat Khan, [arXiv:2611.16534](https://arxiv.org/abs/2611.16534)
+- *Two Unconventional Hall Effects in the Kagome Magnet TmMn4Cr2Sn6*, Mohamed El Gazzah, Fehmi Sami Yasin, Bishal Thapa, Sk Jamaluddin, Abhijeet Nayak, Resham Babu Regmi, Mary Kate Carroll, Igor I. Mazin, Nirmal J. Ghimire, [arXiv:2611.16841](https://arxiv.org/abs/2611.16841)
+- *Inner Product Regularization for Imitation Learning*, Benjamin A. Christie, Tianyu Qiu, Amy H. Choi, David Fridovich-Keil, Dylan P. Losey, [arXiv:2611.17159](https://arxiv.org/abs/2611.17159)
+- *Implementation of a 1D Gaussian-modulated CV-QKD under finite-size parameter estimation*, Christiano M. S. Nascimento, Maron F. Anka, Gabriel A. V. Menezes, Davi J. G. de Sousa, Nelson A. Neto, Artur A. Matoso, Gustavo C. Amaral, Valéria L. Silva, Guilherme P. Temporão, [arXiv:2611.17250](https://arxiv.org/abs/2611.17250)
+- *TTB: Test-time Baking for Efficient Rendering of Decoder-only View Synthesis Models*, Chin-Yang Lin, Ryo Hachiuma, Jaesung Choe, Min-Hung Chen, Yu-Chiang Frank Wang, Yen-Yu Lin, Wei-Chen Chiu, Yu-Lun Liu, Cheng Sun, [arXiv:2611.17331](https://arxiv.org/abs/2611.17331)
+
+The home screenshot lists all six papers; the others show arXiv:2611.16305. The Chinese text in the bilingual and translated-text screenshots is machine translation produced in the app by Firefox Translations (offline); the highlight, comment and notes are examples. The screenshots are only scaled down with the status bar cropped; the page content is not altered.
 
 ## Features
 

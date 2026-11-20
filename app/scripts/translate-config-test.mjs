@@ -10,6 +10,7 @@ import {
   mergeConsents,
   missingSetting,
   resumeNoteKey,
+  startButton,
   supportsTarget,
 } from "../src/screens/generate/translateConfig.ts";
 
@@ -96,4 +97,26 @@ test("選單只列啟用的服務：主要服務在前，接著依備用順序",
     fallbacks: ["e", "c"],
   });
   assert.deepEqual(list.map((x) => x.id), ["d", "e", "a", "b"]);
+});
+
+// 離線翻譯的模型還沒下載時，主按鈕直接是「下載模型並翻譯」（先問，下載完自動開始）
+test("翻譯面板的主按鈕照離線模型的狀態", () => {
+  const base = { local: true, model: "missing", downloading: false, sameLang: true, ready: true };
+  // Firefox 翻譯、模型沒下載
+  assert.deepEqual(startButton(base), { kind: "download", enabled: true });
+  assert.deepEqual(startButton({ ...base, ready: false }), { kind: "download", enabled: false });
+  // 下載中
+  assert.deepEqual(startButton({ ...base, downloading: true }), { kind: "downloading" });
+  // 下載好
+  assert.deepEqual(startButton({ ...base, model: "ready" }), { kind: "start", enabled: true });
+  // 別的服務：照原本的條件，不出現下載
+  assert.deepEqual(startButton({ ...base, local: false }), { kind: "start", enabled: true });
+  assert.deepEqual(startButton({ ...base, local: false, ready: false }), { kind: "start", enabled: false });
+  assert.deepEqual(startButton({ ...base, local: false, downloading: true }), { kind: "start", enabled: true });
+  // 目標語言沒有模型：不出下載鈕
+  assert.deepEqual(startButton({ ...base, model: "noLang" }), { kind: "start", enabled: false });
+  // 還沒讀到模型狀態
+  assert.deepEqual(startButton({ ...base, model: null }), { kind: "start", enabled: false });
+  // 接著翻的譯本語言和模型狀態那一種不同：不提供下載
+  assert.deepEqual(startButton({ ...base, sameLang: false }), { kind: "start", enabled: false });
 });

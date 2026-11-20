@@ -3,25 +3,36 @@ import { api, type LayoutModelStatus, type TranslateSettingsView } from "../../a
 import type { Nav } from "../../nav";
 import { errorMessage, t } from "../../strings";
 import { Button, ErrorNotice } from "../../ui/components";
-import { serviceName } from "../generate/engines";
+import { engineOf, serviceName, useEngines } from "../generate/engines";
 import { migrateLegacyConsent } from "../generate/quickConsent";
 import { fullTranslationService, menuServices } from "../generate/translateConfig";
-import { ModelFileControls, useModelFile, type ModelFileOps } from "../generate/localEngine";
+import {
+  EngineModel,
+  engineSummary,
+  LOCAL_ENGINE,
+  ModelFileControls,
+  useModelFile,
+  useOnDevice,
+  type ModelFileOps,
+} from "../generate/localEngine";
 import { formatBytes } from "./useBackup";
 import { SettingRow, SwitchRow } from "./parts";
 import { presetName } from "./translate/Prompts";
 import { useTranslateSettings } from "./translate/useTranslateSettings";
 
-/** 設定裡的「產生」區：翻譯服務、提示詞預設組、術語庫（各自一頁），送出前要不要詢問，版面模型。 */
+/** 設定裡的「產生」區：翻譯服務、離線翻譯模型、提示詞預設組、術語庫（各自一頁），送出前要不要詢問，版面模型。 */
 export function GenerateSettings(props: { nav: Nav }) {
   const { nav } = props;
   const st = useTranslateSettings();
+  const od = useOnDevice();
   const [terms, setTerms] = useState<number | null>(null);
-  // 從子頁回來時重新讀（子頁改了服務、預設組或術語）
+  // 從子頁回來時重新讀（子頁改了服務、預設組、術語，或下載、刪除了模型）
   const onTop = nav.top.name === "settings";
   const { reload } = st;
+  const odRefresh = od.refresh;
   useEffect(() => {
     if (!onTop) return;
+    void odRefresh();
     // 舊版記在本機儲存的快速翻譯同意，有的話先搬進設定檔再讀
     void api
       .translateSettings()
@@ -32,7 +43,7 @@ export function GenerateSettings(props: { nav: Nav }) {
       .glossaryGet()
       .then((g) => setTerms(g.length))
       .catch(() => {});
-  }, [onTop, reload]);
+  }, [onTop, reload, odRefresh]);
 
   const v = st.view;
   if (!v) {
@@ -52,6 +63,7 @@ export function GenerateSettings(props: { nav: Nav }) {
         chevron
         onClick={() => nav.push({ name: "translateServices" })}
       />
+      <OfflineModelRow nav={nav} v={v} od={od} />
       <SettingRow
         title={t("prompts.title")}
         hint={t("prompts.summary", {
@@ -131,6 +143,41 @@ function QuickServiceRow(props: {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 離線翻譯（Firefox 翻譯）的語言模型：在第一層就看得到下載了沒有、多大，點了直接到 Firefox 翻譯的服務頁
+ * （下載、停止、刪除、只在 Wi-Fi 都在那裡）。服務清單裡沒有 Firefox 翻譯時，下載的控制項直接放在這一列下面。
+ */
+function OfflineModelRow(props: { nav: Nav; v: TranslateSettingsView; od: ReturnType<typeof useOnDevice> }) {
+  const { od } = props;
+  const info = engineOf(useEngines(), LOCAL_ENGINE);
+  if (!od.status) return null;
+  const { line } = engineSummary(od.status, info);
+  const svc = props.v.services.find((s) => s.provider === LOCAL_ENGINE);
+  if (svc) {
+    return (
+      <SettingRow
+        title={t("settings.offlineModel")}
+        hint={line}
+        chevron
+        onClick={() => props.nav.push({ name: "translateService", id: svc.id })}
+      />
+    );
+  }
+  return (
+    <>
+      <SettingRow title={t("settings.offlineModel")} />
+      <div className="set-pad od-model">
+        <EngineModel od={od} wifiOnly={props.v.wifiOnly} canDelete />
+        {od.note ? (
+          <p className={od.note.ok ? "gen-status" : "field-error"} role={od.note.ok ? "status" : "alert"}>
+            {od.note.text}
+          </p>
+        ) : null}
+      </div>
+    </>
   );
 }
 

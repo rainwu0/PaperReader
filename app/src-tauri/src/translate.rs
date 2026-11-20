@@ -243,7 +243,8 @@ impl From<RawSettings> for TranslateSettings {
                     .unwrap_or_else(|| s[0].id.clone());
                 (s, primary)
             }
-            // 舊格式（或全新）：每種引擎一筆，帶上原本記的模型與網址；原本選的那一個啟用並當主要服務
+            // 舊格式（或全新）：每種引擎一筆，帶上原本記的模型與網址；原本選的那一個啟用並當主要服務。
+            // 沒記主要服務的設定以離線翻譯為主要服務：不用金鑰、不花錢、論文不離開裝置
             _ => {
                 let old = r.provider.filter(|p| !p.is_on_device());
                 let mut s = default_services();
@@ -256,7 +257,7 @@ impl From<RawSettings> for TranslateSettings {
                         svc.enabled = svc.provider == o || svc.provider.is_on_device();
                     }
                 }
-                let primary = old.unwrap_or(Provider::Anthropic).key().to_string();
+                let primary = old.unwrap_or(Provider::Bergamot).key().to_string();
                 (s, primary)
             }
         };
@@ -904,7 +905,7 @@ mod tests {
         let s: TranslateSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(s.target_lang, "zh-TW");
         assert!(!s.skip_confirm);
-        assert_eq!(s.primary, "anthropic");
+        assert_eq!(s.primary, "bergamot");
         assert_eq!(s.services.len(), Provider::ALL.len());
         assert!(s.service("anthropic").unwrap().enabled);
         assert!(s.service("bergamot").unwrap().enabled);
@@ -1036,7 +1037,10 @@ mod tests {
 
     #[test]
     fn fallbacks_follow_the_order_and_skip_disabled_services() {
-        let mut s = TranslateSettings::default();
+        let mut s = TranslateSettings {
+            primary: "anthropic".into(),
+            ..Default::default()
+        };
         let mut extra = Service::default_for("anthropic_2", Provider::Anthropic);
         extra.enabled = false;
         s.services.push(extra);
@@ -1056,7 +1060,7 @@ mod tests {
     #[test]
     fn validation_rejects_bad_references_and_prompts() {
         let s = TranslateSettings {
-            fallbacks: vec!["anthropic".into()],
+            fallbacks: vec!["bergamot".into()],
             ..Default::default()
         };
         assert!(

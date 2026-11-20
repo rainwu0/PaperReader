@@ -6,6 +6,7 @@
 //   （服務與主機），設定裡可以重新詢問。設定勾了「送出前不再詢問」的不問。
 // - 位置：打開時算一次（`quickText.placeCard`），之後捲動、縮放、點卡片外就收起（導覽堆疊的一層 `quickPop`），
 //   不跟著每一格重算（逐格重算會拖慢捲動）。沒有改變任何東西，所以收起不給復原。
+// - 離線的 Firefox 翻譯還沒下載模型：卡片上說明並給「下載模型」（下載前同樣先問），下載完卡片還開著就接著翻這一段。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, kindOf, type QuickResult, type TranslateServiceView, type TranslateSettingsView } from "../../api";
@@ -15,6 +16,7 @@ import { errorMessage, t, type StringKey } from "../../strings";
 import { Button, Spinner } from "../../ui/components";
 import { m as Motion, useMotion } from "../../ui/motion";
 import { engineOf, serviceName, useEngines } from "../generate/engines";
+import { EngineModel, engineState, useOnDevice } from "../generate/localEngine";
 import { migrateLegacyConsent } from "../generate/quickConsent";
 import { menuServices, missingSetting, quickServiceId, supportsTarget } from "../generate/translateConfig";
 import type { SelectionCapture } from "./pdfView";
@@ -62,7 +64,31 @@ type Phase =
   | { k: "done"; r: QuickResult }
   | { k: "fail"; why: string; others: TranslateServiceView[] }
   | { k: "long" }
+  | { k: "model"; s: TranslateServiceView }
   | { k: "blocked"; why: string };
+
+/** 卡片上的模型下載：同設定裡的下載（先問、進度、停止）；下載好了呼叫 `onReady` 一次。 */
+function QuickModel(props: { wifiOnly: boolean; onReady: () => void }) {
+  const od = useOnDevice();
+  const ready = od.status ? engineState(od.status) === "ready" : false;
+  const fired = useRef(false);
+  const { onReady } = props;
+  useEffect(() => {
+    if (!ready || fired.current) return;
+    fired.current = true;
+    onReady();
+  }, [ready, onReady]);
+  return (
+    <div className="od-model">
+      <EngineModel od={od} wifiOnly={props.wifiOnly} />
+      {od.note && !od.note.ok ? (
+        <p className="field-error" role="alert">
+          {od.note.text}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function QuickCard(props: {
   paperId: string;
@@ -128,6 +154,15 @@ export function QuickCard(props: {
           why: t("quick.missing", { name: serviceName(s), why: t(`generate.confirm.why.${missing}` as StringKey) }),
         });
         return;
+      }
+      // 離線引擎還沒下載模型：先在卡片上給下載（讀不到狀態就照常翻，外殼會說原因）
+      if (info?.kind === "on_device") {
+        const st = await api.onDeviceStatus().catch(() => null);
+        if (my !== req.current) return;
+        if (st && engineState(st) === "missing") {
+          setPhase({ k: "model", s });
+          return;
+        }
       }
       const key = consentKey(s.id, s.host);
       if (info?.leavesDevice && !v.skipConfirm && !consentsRef.current.includes(key)) {
@@ -267,6 +302,13 @@ export function QuickCard(props: {
           <div className="seg-pop-actions">
             <Button onClick={props.onFull}>{t("quick.toFull")}</Button>
           </div>
+        </div>
+      ) : null}
+
+      {phase.k === "model" && cfg ? (
+        <div className="quick-body">
+          <p className="quick-note">{t("quick.needModel", { name: serviceName(phase.s) })}</p>
+          <QuickModel wifiOnly={cfg.wifiOnly} onReady={() => void run(phase.s, cfg, false)} />
         </div>
       ) : null}
 

@@ -19,8 +19,15 @@ export const ondeviceStrings = {
   "ondevice.wifiOnly": "只在 Wi-Fi 下載模型",
   "ondevice.failed": "沒有完成：{reason}",
 
-  // 產生畫面
-  "generate.local.needModel": "先下載語言模型。",
+  // 設定的「產生」區：離線翻譯模型那一列
+  "settings.offlineModel": "離線翻譯模型",
+
+  // 翻譯面板：模型還沒下載時，主按鈕就是下載（先問，下載完自動開始）
+  "generate.local.downloadStart": "下載模型並翻譯（約 {size}）",
+  "generate.local.autoStart": "下載完會自動開始翻譯。",
+
+  // 選字的快速翻譯
+  "quick.needModel": "{name}要先下載語言模型。下載完就翻這一段。",
 
   // 版面模型（只用在翻譯的分段）：下載、刪除的文字和上面的語言模型共用，這裡只放不同的幾句
   "layout.title": "版面模型",

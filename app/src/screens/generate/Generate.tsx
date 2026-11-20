@@ -4,6 +4,8 @@
 // 翻譯本身在外殼的背景工作裡進行（可以離開這個畫面）；這個畫面只負責開始、顯示進度、取消、接著翻。
 // 主要服務停擺時，進度畫面先問要不要改用依序的下一個服務；「送出前不再詢問」不涵蓋這一步。
 // 說明與結果是導覽堆疊裡的面板（`nav.ts`），返回鍵先關掉它。
+// 選了離線的 Firefox 翻譯而模型還沒下載時，主按鈕是「下載模型並翻譯」：先問（同設定裡的下載），下載完自動開始；
+// 下載途中離開面板、換了服務或停止下載，就不自動開始。
 // 和產生重點筆記共用的流程在 `useGenerateJob.ts`、`ServicePanel.tsx`、`JobProgress.tsx`。
 
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
@@ -14,7 +16,7 @@ import { errorReason, t, type StringKey } from "../../strings";
 import { cancelBuild, expectTranslation, getBuild, startBuild, subscribeBuild } from "../../translate/autoBuild";
 import { Button, CheckRow, Details, ErrorNotice, InfoTip, KindNotice, Screen, Segmented } from "../../ui/components";
 import { useAddTranslation } from "../add/useAddTranslation";
-import { EngineModel, engineState, useOnDevice } from "./localEngine";
+import { engineSummary, ModelAsk, ModelProgress, useOnDevice } from "./localEngine";
 import { DigestGenerate } from "./DigestGenerate";
 import { engineOf, segmentServiceName, serviceName, servicesUsed, useEngines } from "./engines";
 import { AnalyzingScreen, FallbackAsk, ProgressBar, UsageDetails } from "./JobProgress";
@@ -26,6 +28,7 @@ import {
   missingSetting,
   resumeNoteKey,
   serviceModel,
+  startButton,
   supportsTarget,
 } from "./translateConfig";
 import { useGenerateJob } from "./useGenerateJob";
@@ -162,6 +165,10 @@ function TranslateGenerate(props: {
   const [refinePick, setRefinePick] = useState<boolean | null>(null);
   const [finalPick, setFinalPick] = useState<boolean | null>(null);
   const [existing, setExisting] = useState<Existing | null>(null);
+  /** 按了「下載模型並翻譯」，正在問要不要下載。 */
+  const [askDownload, setAskDownload] = useState(false);
+  /** 下載完要自動開始的那一次（哪個服務、接著翻哪一份）；`downloaded` 是模型已經下載完。 */
+  const [pending, setPending] = useState<{ service: string; resume: string | null; downloaded: boolean } | null>(null);
 
   const loadExisting = async (d: PaperDetail) => {
     const overlays = d.paper.materials.filter((m) => m.role === ROLE_TRANSLATION && m.form === FORM_OVERLAY);
@@ -214,7 +221,7 @@ function TranslateGenerate(props: {
   const host = svc?.host ?? "";
   const asks = cfg ? !cfg.skipConfirm : true;
   const needConsent = leaves && asks && !consent;
-  const localReady = od.status ? engineState(od.status) === "ready" : false;
+  const offline = local && od.status ? engineSummary(od.status, info) : null;
   const resumeCounts = resumeDoc ? counts(resumeDoc) : null;
   const providerLabel = (provider: string, model: string) =>
     t(`settings.generate.provider.${provider}` as StringKey) + (model ? `（${model}）` : "");
@@ -228,7 +235,18 @@ function TranslateGenerate(props: {
     const now = providerLabel(svc.provider, chat ? serviceModel(svc, info) : "");
     return old !== now ? { old, now } : null;
   })();
-  const canStart = !!svc && missing === null && !needConsent && targetOk && (!local || localReady);
+  const button = startButton({
+    local,
+    model: offline?.state ?? null,
+    downloading: od.busy,
+    // 模型狀態照設定的目標語言；接著翻時照那份譯本的語言
+    sameLang: !od.status || od.status.targetLang === targetLang,
+    ready: !!svc && missing === null && !needConsent && targetOk,
+  });
+  const canStart = button.kind === "start" && button.enabled;
+  // 這個面板還在最上面（上面另外疊了畫面，例如到設定改服務，就算離開了）
+  const topScreen = [...nav.stack].reverse().find((r) => r.name !== "sheet");
+  const onPanel = g.phase === "panel" && topScreen?.name === "generate";
 
   /** 面板上改的語言與選項、這次用的服務記進設定（下次打開面板沿用）。 */
   const remember = async (service: string) => {
@@ -331,6 +349,29 @@ function TranslateGenerate(props: {
         g.fail("generate.start.failed", e);
       }
     });
+
+  /** 「下載模型並翻譯」問過之後：下載，下載完（面板沒離開、服務沒換）自動開始。 */
+  const downloadAndStart = () => {
+    if (!svc || !cfg) return;
+    const want = { service: svc.id, resume: resumeId, downloaded: false };
+    setPending(want);
+    void od.download(cfg.wifiOnly).then((ok) =>
+      setPending((cur) => (cur !== want ? cur : ok ? { ...want, downloaded: true } : null)),
+    );
+  };
+
+  useEffect(() => {
+    if (!pending) return;
+    if (!onPanel || pending.service !== serviceId || pending.resume !== resumeId) {
+      setPending(null);
+      return;
+    }
+    if (!pending.downloaded) return;
+    setPending(null);
+    if (canStart) void start(pending.resume, pending.service);
+    // 只在這幾項變了時判斷；`start` 每次重畫都是新的
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, onPanel, serviceId, resumeId, canStart]);
 
   const back = () => void nav.back();
   const openReader = (view: "compare" | "overlay") => nav.push({ name: "reader", paperId, view });
@@ -572,6 +613,7 @@ function TranslateGenerate(props: {
               onPick={(id) => {
                 setServiceId(id);
                 setConsent(false);
+                setAskDownload(false);
               }}
               empty={cfg ? t("translate.panel.noService") : null}
               svc={svc}
@@ -634,23 +676,52 @@ function TranslateGenerate(props: {
               {svc?.provider === "deepl" && cfg && !resumeDoc && cfg.sourceLang === "" ? (
                 <p className="muted small">{t("translate.panel.deeplGlossary")}</p>
               ) : null}
-              {local && cfg ? (
-                <>
-                  <EngineModel od={od} wifiOnly={cfg.wifiOnly} />
-                  {!localReady ? <p className="muted small hint">{t("generate.local.needModel")}</p> : null}
-                </>
+              {/* 模型的狀態一句；要下載就按下面的主按鈕 */}
+              {offline ? (
+                <p className="muted small" role="status">
+                  {offline.line}
+                </p>
               ) : null}
             </ServicePanel>
 
+            {button.kind === "downloading" && od.status ? (
+              <div className="od-model">
+                <ModelProgress progress={od.status.download} onStop={od.stop} />
+                {pending ? <p className="muted small">{t("generate.local.autoStart")}</p> : null}
+              </div>
+            ) : null}
+            {button.kind === "download" && askDownload && od.status && offline ? (
+              <ModelAsk
+                title={t("ondevice.ask.title")}
+                body={t("ondevice.ask.body", { host: od.status.bergamotHost, size: offline.size })}
+                onConfirm={() => {
+                  setAskDownload(false);
+                  downloadAndStart();
+                }}
+                onCancel={() => setAskDownload(false)}
+              />
+            ) : null}
+            {local && od.note && !od.note.ok ? (
+              <p className="field-error" role="alert">
+                {od.note.text}
+              </p>
+            ) : null}
             <div className="gen-actions">
-              <Button
-                primary
-                block
-                disabled={!canStart || addTranslation.busy}
-                onClick={() => svc && void start(resumeId, svc.id)}
-              >
-                {resumeId ? t("generate.existing.resume") : t("translate.panel.start")}
-              </Button>
+              {button.kind === "download" && !askDownload ? (
+                <Button primary block disabled={!button.enabled || addTranslation.busy} onClick={() => setAskDownload(true)}>
+                  {t("generate.local.downloadStart", { size: offline?.size ?? "" })}
+                </Button>
+              ) : null}
+              {button.kind === "start" ? (
+                <Button
+                  primary
+                  block
+                  disabled={!canStart || addTranslation.busy}
+                  onClick={() => svc && void start(resumeId, svc.id)}
+                >
+                  {resumeId ? t("generate.existing.resume") : t("translate.panel.start")}
+                </Button>
+              ) : null}
               {resumeId ? (
                 <Button block onClick={() => setResumeId(null)}>
                   {t("common.cancel")}

@@ -1,5 +1,6 @@
 // 要下載才有的模型檔的共用部分：狀態、下載（先問）、停止與刪除（`useModelFile`、`ModelFileControls`）。
-// 離線翻譯（Firefox 翻譯）的語言模型：設定的服務頁與產生畫面的確認頁用；版面模型：設定的「產生」區用。
+// 離線翻譯（Firefox 翻譯）的語言模型：設定（「產生」區的「離線翻譯模型」與服務頁）、翻譯面板、選字的快速翻譯用；
+// 版面模型：設定的「產生」區用。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAlive, usePoll } from "../../hooks";
@@ -24,6 +25,23 @@ export function engineState(s: OnDeviceStatus): "ready" | "missing" | "noLang" {
 function bergamotModel(s: OnDeviceStatus, info: EngineInfo | null) {
   const target = info?.targets.find((l) => l.code.toLowerCase() === s.targetLang.toLowerCase())?.engineCode;
   return s.bergamot.find((m) => m.target === target) ?? null;
+}
+
+/**
+ * 目前目標語言的模型：狀態（支援哪些目標語言照引擎申報）、狀態那一句、要下載的大小、模型本身。
+ * 設定的「離線翻譯模型」那一列、翻譯面板、選字的快速翻譯共用同一套說法。
+ */
+export function engineSummary(s: OnDeviceStatus, info: EngineInfo | null) {
+  const state = info && !supportsTarget(info, s.targetLang) ? "noLang" : engineState(s);
+  const bm = bergamotModel(s, info);
+  const size = formatBytes(bm?.downloadBytes ?? 0);
+  const line =
+    state === "noLang"
+      ? t("ondevice.noLang", { lang: t(`settings.generate.lang.${s.targetLang}` as StringKey) })
+      : state === "ready" && bm
+        ? t("ondevice.ready", { size: formatBytes(bm.bytes) })
+        : t("ondevice.notReady", { size });
+  return { state, line, size, bm };
 }
 
 /**
@@ -73,13 +91,16 @@ export function useModelFile<S>(ops: ModelFileOps<S>) {
   // 下載中每隔一下更新進度
   usePoll(busy, refresh, 700);
 
-  const download = async (wifiOnly: boolean) => {
-    if (busy) return;
+  /** 下載；交回有沒有下載完（停止、失敗是 `false`）。交回時狀態已經重讀過。 */
+  const download = async (wifiOnly: boolean): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
     setNote(null);
     stopped.current = false;
+    let ok = false;
     try {
       await ops.download(wifiOnly);
+      ok = true;
       if (alive.current) setNote({ ok: true, text: t("ondevice.downloaded") });
     } catch (e) {
       if (alive.current && !stopped.current) setNote({ ok: false, text: t("ondevice.failed", { reason: errorMessage(kindOf(e)) }) });
@@ -87,6 +108,7 @@ export function useModelFile<S>(ops: ModelFileOps<S>) {
       if (alive.current) setBusy(false);
       await refresh();
     }
+    return ok;
   };
 
   const remove = async (model: string) => {
@@ -111,6 +133,37 @@ export function useModelFile<S>(ops: ModelFileOps<S>) {
 
 type OnDevice = ReturnType<typeof useOnDevice>;
 
+/** 下載前的確認：連到哪裡、多大、不送出什麼；按「下載」才下載。 */
+export function ModelAsk(props: { title: string; body: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="od-ask" role="group" aria-label={props.title}>
+      <p className="small">{props.body}</p>
+      <div className="btn-row">
+        <Button primary onClick={props.onConfirm}>
+          {t("ondevice.ask.confirm")}
+        </Button>
+        <Button onClick={props.onCancel}>{t("switch.intro.decline")}</Button>
+      </div>
+    </div>
+  );
+}
+
+/** 下載中：已下載多少、進度條、「停止下載」。 */
+export function ModelProgress(props: { progress: { done: number; total: number }; onStop: () => void }) {
+  const dl = props.progress;
+  return (
+    <>
+      <p className="muted small" role="status">
+        {t("ondevice.downloading", { done: formatBytes(dl.done), total: formatBytes(dl.total) })}
+      </p>
+      <ProgressBar n={dl.done} total={dl.total} />
+      <div className="btn-row">
+        <Button onClick={props.onStop}>{t("ondevice.cancelDownload")}</Button>
+      </div>
+    </>
+  );
+}
+
 /**
  * 一個模型檔的控制項：狀態那一句、下載（先說明連到哪裡、多大，按「下載」才下載）、進度與停止、刪除。
  * 離線翻譯的語言模型與版面模型共用。
@@ -131,40 +184,23 @@ export function ModelFileControls(props: {
   onDelete?: () => void;
 }) {
   const [asking, setAsking] = useState<"download" | null>(null);
-  const dl = props.progress;
   return (
     <>
       <p className="muted small" role="status">
         {props.line}
       </p>
-      {props.busy ? (
-        <>
-          <p className="muted small" role="status">
-            {t("ondevice.downloading", { done: formatBytes(dl.done), total: formatBytes(dl.total) })}
-          </p>
-          <ProgressBar n={dl.done} total={dl.total} />
-          <div className="btn-row">
-            <Button onClick={props.onStop}>{t("ondevice.cancelDownload")}</Button>
-          </div>
-        </>
-      ) : null}
+      {props.busy ? <ModelProgress progress={props.progress} onStop={props.onStop} /> : null}
       {props.missing && !props.busy ? (
         asking === "download" ? (
-          <div className="od-ask" role="group" aria-label={props.askTitle}>
-            <p className="small">{props.askBody}</p>
-            <div className="btn-row">
-              <Button
-                primary
-                onClick={() => {
-                  setAsking(null);
-                  props.onDownload();
-                }}
-              >
-                {t("ondevice.ask.confirm")}
-              </Button>
-              <Button onClick={() => setAsking(null)}>{t("switch.intro.decline")}</Button>
-            </div>
-          </div>
+          <ModelAsk
+            title={props.askTitle}
+            body={props.askBody}
+            onConfirm={() => {
+              setAsking(null);
+              props.onDownload();
+            }}
+            onCancel={() => setAsking(null)}
+          />
         ) : (
           <div className="btn-row">
             <Button primary onClick={() => setAsking("download")}>
@@ -188,18 +224,7 @@ export function EngineModel(props: { od: OnDevice; wifiOnly: boolean; canDelete?
   const s = od.status;
   const info = engineOf(useEngines(), LOCAL_ENGINE);
   if (!s) return null;
-  // 支援哪些目標語言照引擎申報
-  const state = info && !supportsTarget(info, s.targetLang) ? "noLang" : engineState(s);
-  const bm = bergamotModel(s, info);
-  const langName = t(`settings.generate.lang.${s.targetLang}` as StringKey);
-
-  const line =
-    state === "noLang"
-      ? t("ondevice.noLang", { lang: langName })
-      : state === "ready" && bm
-        ? t("ondevice.ready", { size: formatBytes(bm.bytes) })
-        : t("ondevice.notReady", { size: formatBytes(bm?.downloadBytes ?? 0) });
-  const size = formatBytes(bm?.downloadBytes ?? 0);
+  const { state, line, size, bm } = engineSummary(s, info);
   // 已下載、但不是目前目標語言的其他模型（可以刪）
   const others = s.bergamot.filter((m) => m.downloaded && m.id !== bm?.id).map((m) => m.id);
 

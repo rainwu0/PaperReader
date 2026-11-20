@@ -717,7 +717,10 @@ mod tests {
 
     #[test]
     fn only_chat_models_are_offered_as_fallback() {
-        let mut t = TranslateSettings::default();
+        let mut t = TranslateSettings {
+            primary: "anthropic".into(),
+            ..Default::default()
+        };
         for id in ["deepl", "openai"] {
             t.services.iter_mut().find(|s| s.id == id).unwrap().enabled = true;
         }

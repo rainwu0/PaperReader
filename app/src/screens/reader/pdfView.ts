@@ -22,6 +22,7 @@ import type { PageRegion } from "../../ext/types";
 import { toRawItems } from "../../translate/extract";
 import { RegionLayer, type RegionSource } from "./pdfRegions";
 import { segmentAt, shownText, type Seg } from "./segments";
+import { trackTextLayer } from "./textLayerGap";
 import { rangeBox } from "./textRange";
 import { clamp, scrollFor, switchAt, type FollowMark, type PageBox, type SwitchPosition } from "./viewSync";
 
@@ -99,6 +100,8 @@ interface PageSlot {
   k: number;
   /** 文字層（PDF.js 的物件）：換縮放時更新比例就好，不重新向 worker 要文字、不重建。 */
   textLayerObj: pdfjs.TextLayer | null;
+  /** 取消文字層空隙墊片的登記（`textLayerGap.ts`）；沒有登記是 `null`。 */
+  gapOff: (() => void) | null;
   hlLayer: HTMLDivElement | null;
   textLayer: HTMLDivElement | null;
   strokeCanvas: HTMLCanvasElement | null;
@@ -480,6 +483,7 @@ export class PdfView {
         viewport: null,
         k: 1,
         textLayerObj: null,
+        gapOff: null,
         hlLayer: null,
         textLayer: null,
         strokeCanvas: null,
@@ -681,7 +685,10 @@ export class PdfView {
     const layer = makeTextLayer(page, tl, viewport, this.covers?.pages[String(slot.n - 1)]);
     try {
       await layer.render();
-      if (slot.token === token && slot.textLayer === tl) slot.textLayerObj = layer;
+      if (slot.token === token && slot.textLayer === tl) {
+        slot.textLayerObj = layer;
+        slot.gapOff = trackTextLayer(tl);
+      }
     } catch {
       // 沒有文字層（掃描版或讀不出來）就只能看，不能選字
     }
@@ -700,6 +707,8 @@ export class PdfView {
     }
     slot.textLayerObj?.cancel();
     slot.textLayerObj = null;
+    slot.gapOff?.();
+    slot.gapOff = null;
     slot.box.replaceChildren();
     slot.box.classList.remove("stale");
     slot.box.style.removeProperty("--k");

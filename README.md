@@ -18,6 +18,7 @@ PaperReader 把文獻庫放在你自己的裝置上，存成一般的資料夾�
 
 ## 目錄
 
+- [畫面](#畫面)
 - [特色](#特色)
 - [目前沒有的功能](#目前沒有的功能)
 - [安裝](#安裝)
@@ -26,6 +27,52 @@ PaperReader 把文獻庫放在你自己的裝置上，存成一般的資料夾�
 - [文件](#文件)
 - [參與](#參與)
 - [授權](#授權)
+
+## 畫面
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/readme-home.webp" alt="首頁：文獻庫的清單，每篇標出未讀、讀到第幾頁或已讀，有譯本的標「譯」"></td>
+    <td width="33%"><img src="docs/images/readme-toolbox.webp" alt="閱讀畫面，浮動的工具箱展開"></td>
+    <td width="33%"><img src="docs/images/readme-highlight.webp" alt="一條劃線，下方的窗格顯示它的短評"></td>
+  </tr>
+  <tr>
+    <td>首頁：每篇看得出未讀、讀到第幾頁、已讀；有譯本的標「譯」。</td>
+    <td>閱讀：工具箱切換原文、譯本、譯文，劃線、筆刷、跳頁、大綱。</td>
+    <td>劃線與短評：點有短評的劃線，下方打開它的短評。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/readme-bilingual.webp" alt="中英對照：上面原文、下面譯本，捲動一起動"></td>
+    <td><img src="docs/images/readme-text.webp" alt="譯文：整篇譯文排成手機好讀的文字"></td>
+    <td><img src="docs/images/readme-translate.webp" alt="翻譯面板，翻譯服務選 Firefox 翻譯（離線）"></td>
+  </tr>
+  <tr>
+    <td>中英對照：上下兩格，原文與譯本一起捲動。</td>
+    <td>譯文：排成手機好讀的文字，點一段看原文、就地修改。</td>
+    <td>翻譯：選 Firefox 翻譯（離線），在手機上翻，不送出任何東西。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/readme-notes.webp" alt="筆記窗格：整篇的想法與這篇的劃線、短評"></td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>筆記窗格：整篇的想法（Markdown）與劃線、短評列在一起。</td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
+
+截圖中的論文都以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授權：
+
+- *Physics-Aware Transformer-Based Beamforming Optimization for Near-Field E-MIMO ISAC Systems*，Mohsin Ali、Abdulahi Abiodun Badrudeen、Azharul Islam、Sunwoo Kim，[arXiv:2611.16305](https://arxiv.org/abs/2611.16305)
+- *Context-Predictive Low-Rank Adaptation for Face Presentation Attack Detection*，Aminu Yusuf、Shakeel Muhammad Ibrahim、Sulaimon Oyeniyi Adebayo、Muhammad Sohail Ibrahim、Muhammad Shahid Jabbar、Shujaat Khan，[arXiv:2611.16534](https://arxiv.org/abs/2611.16534)
+- *Two Unconventional Hall Effects in the Kagome Magnet TmMn4Cr2Sn6*，Mohamed El Gazzah、Fehmi Sami Yasin、Bishal Thapa、Sk Jamaluddin、Abhijeet Nayak、Resham Babu Regmi、Mary Kate Carroll、Igor I. Mazin、Nirmal J. Ghimire，[arXiv:2611.16841](https://arxiv.org/abs/2611.16841)
+- *Inner Product Regularization for Imitation Learning*，Benjamin A. Christie、Tianyu Qiu、Amy H. Choi、David Fridovich-Keil、Dylan P. Losey，[arXiv:2611.17159](https://arxiv.org/abs/2611.17159)
+- *Implementation of a 1D Gaussian-modulated CV-QKD under finite-size parameter estimation*，Christiano M. S. Nascimento、Maron F. Anka、Gabriel A. V. Menezes、Davi J. G. de Sousa、Nelson A. Neto、Artur A. Matoso、Gustavo C. Amaral、Valéria L. Silva、Guilherme P. Temporão，[arXiv:2611.17250](https://arxiv.org/abs/2611.17250)
+- *TTB: Test-time Baking for Efficient Rendering of Decoder-only View Synthesis Models*，Chin-Yang Lin、Ryo Hachiuma、Jaesung Choe、Min-Hung Chen、Yu-Chiang Frank Wang、Yen-Yu Lin、Wei-Chen Chiu、Yu-Lun Liu、Cheng Sun，[arXiv:2611.17331](https://arxiv.org/abs/2611.17331)
+
+首頁那一張列出全部六篇，其餘各張是 arXiv:2611.16305。中英對照、譯文兩張的中文，是應用以 Firefox 翻譯（離線）產生的機器翻譯；劃線、短評與筆記是示範用的。截圖只縮小、裁掉狀態列，沒有改動頁面內容。
 
 ## 特色
 

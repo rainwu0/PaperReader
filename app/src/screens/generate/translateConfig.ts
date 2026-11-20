@@ -52,6 +52,30 @@ export function resumeNoteKey(info: Pick<EngineInfo, "leavesDevice"> | null): "g
   return info && !info.leavesDevice ? "generate.confirm.resumeNote.local" : "generate.confirm.resumeNote";
 }
 
+/**
+ * 翻譯面板主按鈕的樣子：
+ * - `start`：開始（或接著翻），`enabled` 照面板其餘的條件；
+ * - `download`：離線引擎的模型還沒下載，按鈕改成「下載模型並翻譯」（先問，下載完自動開始）；
+ * - `downloading`：模型正在下載，按鈕換成進度與停止。
+ * `model` 是離線引擎的模型狀態（還沒讀到是 `null`）；`sameLang` 是要翻的語言就是模型狀態那一種
+ * （接著翻舊譯本時語言照那份譯本，可能不同：不同時不提供下載）。
+ */
+export type StartButton = { kind: "start"; enabled: boolean } | { kind: "download"; enabled: boolean } | { kind: "downloading" };
+
+export function startButton(p: {
+  local: boolean;
+  model: "ready" | "missing" | "noLang" | null;
+  downloading: boolean;
+  sameLang: boolean;
+  /** 模型以外的條件都滿足（選了服務、設定完整、支援目標語言、已同意）。 */
+  ready: boolean;
+}): StartButton {
+  if (!p.local) return { kind: "start", enabled: p.ready };
+  if (p.downloading) return { kind: "downloading" };
+  if (p.model === "missing" && p.sameLang) return { kind: "download", enabled: p.ready };
+  return { kind: "start", enabled: p.ready && p.model === "ready" };
+}
+
 /** 翻譯時選單上的服務：啟用的，主要服務在最前面，接著依備用的順序，其餘照清單。 */
 export function menuServices(v: Pick<TranslateSettingsView, "services" | "primary" | "fallbacks">): TranslateServiceView[] {
   const rank = (id: string) => {

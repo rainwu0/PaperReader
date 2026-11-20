@@ -371,7 +371,7 @@ const base = {
   "error.TranslateQuota": "這個帳號的額度用完了。",
   "error.TranslateQuota.detail": "金鑰本身沒問題。已做好的部分都存著；額度重置或加購之後再接著做。",
   "error.TranslateNoModel": "還沒下載語言模型。",
-  "error.TranslateNoModel.detail": "在確認頁或「設定 → 產生」下載。文獻沒有被改動。",
+  "error.TranslateNoModel.detail": "在翻譯面板按「下載模型並翻譯」，或到「設定 → 產生 → 離線翻譯模型」下載。文獻沒有被改動。",
   "error.TranslateLanguage": "沒有譯成這種語言的離線模型。",
   "error.TranslateLanguage.detail": "在「設定 → 產生」改目標語言。",
   "error.NotOnWifi": "不是 Wi-Fi，沒有下載。",
