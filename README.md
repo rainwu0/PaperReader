@@ -49,7 +49,7 @@ PaperReader 把文獻庫放在你自己的裝置上，存成一般的資料夾�
   <tr>
     <td>中英對照：上下兩格，原文與譯本一起捲動。</td>
     <td>譯文：排成手機好讀的文字，點一段看原文、就地修改。</td>
-    <td>翻譯：選 Firefox 翻譯（離線），在手機上翻，不送出任何東西。</td>
+    <td>翻譯：選 Firefox 翻譯（離線），在手機上本地翻譯。(可見效果很差，建議有能力盡量使用LLM API)</td>
   </tr>
   <tr>
     <td><img src="docs/images/readme-notes.webp" alt="筆記窗格：整篇的想法與這篇的劃線、短評"></td>
